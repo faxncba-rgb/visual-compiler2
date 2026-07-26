@@ -181,6 +181,40 @@
             <summary>Payload sent to AI · redacted preview</summary>
             <pre id="payloadPreview">No payload prepared.</pre>
           </details>
+          <section
+            id="compilationDiagnostics"
+            class="compilation-diagnostics"
+            aria-labelledby="compilation-diagnostics-heading"
+            aria-live="polite"
+            hidden
+          >
+            <div class="diagnostics-heading">
+              <div>
+                <span class="eyebrow diagnostics">Persistent error</span>
+                <h4 id="compilation-diagnostics-heading">
+                  Compilation diagnostics
+                </h4>
+              </div>
+              <div class="diagnostics-actions">
+                <button id="copyDiagnostics" type="button">
+                  Copy diagnostics
+                </button>
+                <button id="clearDiagnostics" type="button">Clear</button>
+              </div>
+            </div>
+            <dl class="diagnostics-facts">
+              <div>
+                <dt>HTTP status</dt>
+                <dd id="diagnosticHttpStatus">—</dd>
+              </div>
+              <div>
+                <dt>Compiler stage</dt>
+                <dd id="diagnosticCompilerStage">—</dd>
+              </div>
+            </dl>
+            <span class="diagnostic-label">Redacted server message</span>
+            <pre id="diagnosticServerMessage"></pre>
+          </section>
         </section>
       </section>
 
@@ -197,6 +231,7 @@
           <button class="tab" data-tab="locators">Locators</button>
           <button class="tab" data-tab="generated">Generated</button>
           <button class="tab" data-tab="runtime">Runtime log</button>
+          <button class="tab" data-tab="studio-events">Studio log</button>
         </nav>
         <section class="tab-panel active" data-panel="demonstration">
           <pre id="demonstrationJson">No demonstration recorded.</pre>
@@ -214,6 +249,9 @@
         </section>
         <section class="tab-panel" data-panel="runtime">
           <pre id="runtimeLog">No local run yet.</pre>
+        </section>
+        <section class="tab-panel" data-panel="studio-events">
+          <pre id="studioEventLog">No persistent Studio events yet.</pre>
         </section>
       </aside>
     </main>

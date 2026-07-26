@@ -42,4 +42,19 @@ describe("zero-OpenAI runtime boundary", () => {
     expect(safe).not.toContain("patient=123");
     expect(safe).toContain("token=[REDACTED]");
   });
+
+  it("redacts form values, cookies and authentication data from diagnostics", () => {
+    const formValue = "LOCAL-FORM-VALUE";
+    const safe = safeTelemetryMessage(
+      `compile failed for ${formValue} at http://local.test/path?record=${formValue}&mode=test cookie=session token=abc Authorization=Bearer credential`,
+      [formValue],
+    );
+    expect(safe).toContain("http://local.test/path");
+    expect(safe).not.toContain(formValue);
+    expect(safe).not.toContain("record=");
+    expect(safe).not.toContain("session");
+    expect(safe).not.toContain("credential");
+    expect(safe).toContain("cookie=[REDACTED]");
+    expect(safe).toContain("token=[REDACTED]");
+  });
 });

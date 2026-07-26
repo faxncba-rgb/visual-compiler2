@@ -22,8 +22,14 @@ export function createRuntimeTelemetry(
   });
 }
 
-export function safeTelemetryMessage(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+export function safeTelemetryMessage(
+  error: unknown,
+  sensitiveValues: Iterable<string> = [],
+) {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const value of sensitiveValues) {
+    if (value) message = message.replaceAll(value, "[REDACTED_FORM_VALUE]");
+  }
   return message
     .replaceAll(/https?:\/\/[^\s"']+/g, (url) => {
       try {
@@ -34,7 +40,12 @@ export function safeTelemetryMessage(error: unknown) {
       }
     })
     .replaceAll(
-      /(password|token|secret|patient)[=:]\s*[^\s,;]+/gi,
+      /\b(Bearer|Basic)\s+[a-z0-9._~+/=-]+/gi,
+      "[REDACTED_AUTHORIZATION]",
+    )
+    .replaceAll(/([?&][^=\s&#]+)=([^&#\s]+)/g, "$1=[REDACTED]")
+    .replaceAll(
+      /(password|passcode|token|secret|patient|cookie|authorization|authentication|api[-_]?key|form[-_]?value|query|parameter)[=:]\s*[^\s,;]+/gi,
       "$1=[REDACTED]",
     );
 }

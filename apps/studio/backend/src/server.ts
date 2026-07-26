@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { readFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ManagedBrowser } from "../../../../packages/managed-browser/src";
@@ -11,6 +11,8 @@ import { DemonstrationRecorder } from "../../../../packages/demonstration-record
 import {
   buildAiPayload,
   compileDemonstration,
+  CompilationStageError,
+  type CompilationStage,
 } from "../../../../packages/generalization-compiler/src";
 import {
   DeterministicRuntime,
@@ -27,15 +29,42 @@ import {
 import {
   StudioStateMachine,
   canonicalizeUrl,
+  createId,
   redactObject,
 } from "../../../../packages/shared/src";
 import {
   LocalVariableValuesSchema,
   type LocalVariableValues,
 } from "../../../../packages/workflow-variables/src";
+import { safeTelemetryMessage } from "../../../../packages/telemetry/src";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendDirectory = path.resolve(moduleDirectory, "../../frontend");
+
+export type StudioCompilationStage =
+  | CompilationStage
+  | "request-validation"
+  | "artifact-persistence"
+  | "state-transition";
+
+export type StudioCompilationDiagnostic = {
+  id: string;
+  occurredAt: string;
+  httpStatus: number;
+  compilerStage: StudioCompilationStage;
+  serverMessage: string;
+};
+
+class StudioCompilationFailure extends Error {
+  readonly name = "StudioCompilationFailure";
+
+  constructor(
+    readonly stage: StudioCompilationStage,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
 
 function sendJson(response: ServerResponse, status: number, value: unknown) {
   response.writeHead(status, {
@@ -106,6 +135,8 @@ export class StudioController {
   workflow: CompiledWorkflow | undefined;
   telemetry: RuntimeTelemetry | undefined;
   aiPayload: ReturnType<typeof buildAiPayload> | undefined;
+  compilationDiagnostic: StudioCompilationDiagnostic | undefined;
+  readonly studioEventLog: StudioCompilationDiagnostic[] = [];
   localValues: LocalVariableValues = {};
   generalizationInstruction = "";
   targetUrl = `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? 4273}/fixture?variant=A`;
@@ -142,6 +173,8 @@ export class StudioController {
       aiPayloadPreview: this.aiPayload,
       workflow: this.workflow,
       telemetry: this.telemetry,
+      compilationDiagnostic: this.compilationDiagnostic,
+      studioEventLog: this.studioEventLog,
       metrics: {
         compileTimeModelCalls:
           this.workflow?.compilationMetadata.modelCalls ?? 0,
@@ -254,6 +287,7 @@ export class StudioController {
   }
 
   async compile(instruction: unknown) {
+    this.compilationDiagnostic = undefined;
     if (this.#mutation)
       throw new Error(`A ${this.#mutation} request is already active.`);
     if (this.machine.state !== "DEMONSTRATION_REVIEW")
@@ -263,9 +297,11 @@ export class StudioController {
     if (!this.session) throw new Error("No demonstration is available.");
     this.#mutation = "compile";
     this.machine.transition("COMPILING");
+    let stage: StudioCompilationStage = "demonstration-validation";
     try {
       this.generalizationInstruction =
         typeof instruction === "string" ? instruction.trim() : "";
+      stage = "locator-validation";
       const result = await compileDemonstration({
         session: this.session,
         graph: this.browser.graph,
@@ -274,16 +310,64 @@ export class StudioController {
       });
       this.workflow = result.workflow;
       this.aiPayload = result.aiPayload;
+      stage = "artifact-persistence";
       await this.persistArtifacts();
+      stage = "state-transition";
       this.machine.compileReady();
       await this.persistRecoverableState();
       return this.workflow;
     } catch (error) {
       this.machine.transition("FAILED");
-      throw error;
+      throw new StudioCompilationFailure(
+        error instanceof CompilationStageError ? error.stage : stage,
+        error,
+      );
     } finally {
       this.#mutation = undefined;
     }
+  }
+
+  async recordCompilationDiagnostic(error: unknown, httpStatus: number) {
+    const sensitiveValues = [
+      ...Object.values(this.localValues).map(String),
+      this.generalizationInstruction,
+    ];
+    const diagnostic: StudioCompilationDiagnostic = {
+      id: createId("compile-diagnostic"),
+      occurredAt: new Date().toISOString(),
+      httpStatus,
+      compilerStage:
+        error instanceof StudioCompilationFailure
+          ? error.stage
+          : error instanceof CompilationStageError
+            ? error.stage
+            : "request-validation",
+      serverMessage: safeTelemetryMessage(error, sensitiveValues),
+    };
+    this.compilationDiagnostic = diagnostic;
+    this.studioEventLog.push(diagnostic);
+    if (this.studioEventLog.length > 100) this.studioEventLog.shift();
+    console.error(
+      `[Studio compilation diagnostic] ${JSON.stringify(diagnostic)}`,
+    );
+    const directory = path.join(this.rootDirectory, "local-data");
+    try {
+      await mkdir(directory, { recursive: true });
+      await appendFile(
+        path.join(directory, "studio-events.jsonl"),
+        `${JSON.stringify(diagnostic)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+    } catch {
+      console.error(
+        "[Studio compilation diagnostic] The redacted local event log could not be persisted.",
+      );
+    }
+    return diagnostic;
+  }
+
+  clearCompilationDiagnostic() {
+    this.compilationDiagnostic = undefined;
   }
 
   async run(mode: unknown) {
@@ -478,11 +562,15 @@ export function createStudioServer(controller = new StudioController()) {
       }
       if (request.method === "POST" && url.pathname === "/api/compile") {
         const body = await readJson(request);
-        return sendJson(
-          response,
-          200,
-          await controller.compile(body.instruction),
-        );
+        await controller.compile(body.instruction);
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/compilation-diagnostics/clear"
+      ) {
+        controller.clearCompilationDiagnostic();
+        return sendJson(response, 200, controller.snapshot());
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
         const body = await readJson(request);
@@ -506,6 +594,23 @@ export function createStudioServer(controller = new StudioController()) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const conflict = /already active|not ready|Reset before/.test(message);
+      if (url.pathname === "/api/compile") {
+        const httpStatus =
+          error instanceof StudioCompilationFailure
+            ? 422
+            : conflict
+              ? 409
+              : 400;
+        const diagnostic = await controller.recordCompilationDiagnostic(
+          error,
+          httpStatus,
+        );
+        sendJson(response, httpStatus, {
+          error: diagnostic.serverMessage,
+          diagnostic,
+        });
+        return;
+      }
       sendJson(response, conflict ? 409 : 400, { error: message });
     }
   });

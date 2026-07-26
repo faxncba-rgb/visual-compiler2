@@ -7,6 +7,15 @@ let previewTimer;
 let requestInFlight = false;
 let lastRunMode = "local";
 
+class ApiError extends Error {
+  constructor(message, status, diagnostic) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.diagnostic = diagnostic;
+  }
+}
+
 function toast(message, error = false) {
   const element = $("#toast");
   element.textContent = message;
@@ -25,7 +34,11 @@ async function api(path, options = {}) {
   });
   const body = await response.json();
   if (!response.ok)
-    throw new Error(body.error ?? `Request failed (${response.status})`);
+    throw new ApiError(
+      body.error ?? `Request failed (${response.status})`,
+      response.status,
+      body.diagnostic,
+    );
   return body;
 }
 
@@ -231,6 +244,36 @@ function renderLocators(workflow) {
   }
 }
 
+function formatCompilationDiagnostic(diagnostic) {
+  return [
+    `HTTP status: ${diagnostic.httpStatus}`,
+    `Compiler stage: ${diagnostic.compilerStage}`,
+    `Occurred at: ${diagnostic.occurredAt}`,
+    "Redacted server message:",
+    diagnostic.serverMessage,
+  ].join("\n");
+}
+
+function renderCompilationDiagnostics(diagnostic) {
+  const panel = $("#compilationDiagnostics");
+  panel.hidden = !diagnostic;
+  if (!diagnostic) {
+    $("#diagnosticHttpStatus").textContent = "—";
+    $("#diagnosticCompilerStage").textContent = "—";
+    $("#diagnosticServerMessage").textContent = "";
+    return;
+  }
+  $("#diagnosticHttpStatus").textContent = String(diagnostic.httpStatus);
+  $("#diagnosticCompilerStage").textContent = diagnostic.compilerStage;
+  $("#diagnosticServerMessage").textContent = diagnostic.serverMessage;
+}
+
+function renderStudioEventLog(events = []) {
+  $("#studioEventLog").textContent = events.length
+    ? events.map(formatCompilationDiagnostic).join("\n\n")
+    : "No persistent Studio events yet.";
+}
+
 function renderButtons() {
   const current = state?.state ?? "IDLE";
   const hasWorkflow = Boolean(state?.workflow);
@@ -308,6 +351,8 @@ function render() {
     state.aiPayloadPreview,
     "No payload prepared.",
   );
+  renderCompilationDiagnostics(state.compilationDiagnostic);
+  renderStudioEventLog(state.studioEventLog);
   renderLocators(state.workflow);
   renderButtons();
 }
@@ -373,15 +418,50 @@ $("#stopTeaching").addEventListener(
       "Teaching stopped. Review the exact recorded timeline.",
     ),
 );
-$("#compile").addEventListener(
+
+async function compileWorkflow() {
+  requestInFlight = true;
+  if (state) state.compilationDiagnostic = undefined;
+  renderCompilationDiagnostics(undefined);
+  renderButtons();
+  try {
+    state = await api("/api/compile", {
+      body: { instruction: $("#generalizationInstruction").value },
+    });
+    render();
+    toast(
+      "Validated artifact compiled. Animated and local run are both ready.",
+    );
+  } catch {
+    await refresh();
+  } finally {
+    requestInFlight = false;
+    renderButtons();
+  }
+}
+
+$("#compile").addEventListener("click", () => void compileWorkflow());
+$("#clearDiagnostics").addEventListener(
   "click",
   () =>
     void mutate(
-      "/api/compile",
-      { instruction: $("#generalizationInstruction").value },
-      "Validated artifact compiled. Animated and local run are both ready.",
+      "/api/compilation-diagnostics/clear",
+      {},
+      "Compilation diagnostics cleared.",
     ),
 );
+$("#copyDiagnostics").addEventListener("click", async () => {
+  const diagnostic = state?.compilationDiagnostic;
+  if (!diagnostic) return;
+  try {
+    await navigator.clipboard.writeText(
+      formatCompilationDiagnostic(diagnostic),
+    );
+    toast("Compilation diagnostics copied.");
+  } catch {
+    toast("Diagnostics could not be copied.", true);
+  }
+});
 
 async function run(mode) {
   lastRunMode = mode;

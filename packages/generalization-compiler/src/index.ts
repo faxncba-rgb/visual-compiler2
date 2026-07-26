@@ -23,6 +23,30 @@ import { createId, sha256 } from "../../shared/src";
 
 export const PROMPT_VERSION = "demonstration-generalization-v1";
 
+export type CompilationStage =
+  | "demonstration-validation"
+  | "generalization"
+  | "locator-validation"
+  | "application-outcome-validation"
+  | "artifact-validation";
+
+export class CompilationStageError extends Error {
+  readonly name = "CompilationStageError";
+
+  constructor(
+    readonly stage: CompilationStage,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+function compilationStageError(stage: CompilationStage, error: unknown) {
+  return error instanceof CompilationStageError
+    ? error
+    : new CompilationStageError(stage, error);
+}
+
 export const AiGeneralizationOutputSchema = z.object({
   summary: z.string(),
   preserveDemonstratedTargets: z.literal(true),
@@ -494,63 +518,88 @@ export async function compileDemonstration({
   workflow: CompiledWorkflow;
   aiPayload?: AiPayload;
 }> {
-  const session = DemonstrationSessionSchema.parse(rawSession);
-  assertNoLocalValuesInSession(session, localValues);
+  let session: DemonstrationSession;
+  try {
+    session = DemonstrationSessionSchema.parse(rawSession);
+    assertNoLocalValuesInSession(session, localValues);
+  } catch (error) {
+    throw compilationStageError("demonstration-validation", error);
+  }
   const instruction = generalizationInstruction.trim();
   let aiPayload: AiPayload | undefined;
   let aiOutput: AiGeneralizationOutput | undefined;
   if (instruction) {
-    aiPayload = buildAiPayload(session, instruction, localValues);
-    aiOutput = AiGeneralizationOutputSchema.parse(
-      await provider.generalize(aiPayload),
-    );
+    try {
+      aiPayload = buildAiPayload(session, instruction, localValues);
+      aiOutput = AiGeneralizationOutputSchema.parse(
+        await provider.generalize(aiPayload),
+      );
+    } catch (error) {
+      throw compilationStageError("generalization", error);
+    }
   }
-  const steps = await compileSteps(session, graph, localValues);
+  let steps: CompiledStep[];
+  try {
+    steps = await compileSteps(session, graph, localValues);
+  } catch (error) {
+    throw compilationStageError("locator-validation", error);
+  }
+  let expectedOutcome: ApplicationOutcome;
+  try {
+    expectedOutcome = compileOutcome(session);
+  } catch (error) {
+    throw compilationStageError("application-outcome-validation", error);
+  }
   const workflowId = createId("workflow");
   const compileMode = instruction
     ? "mock-ai-generalization"
     : "direct-demonstration";
-  const workflow = CompiledWorkflowSchema.parse({
-    schemaVersion: "2.0.0",
-    id: workflowId,
-    version: "1.0.0",
-    sourceDemonstrationId: session.id,
-    compileMode,
-    pageContexts: session.pages.map((page) => ({
-      ...page,
-      resolutionOrder: [
-        "opener",
-        "origin-path",
-        "title",
-        "structural-fingerprint",
-        "landmark",
-        "page-role",
-      ],
-    })),
-    steps,
-    loops: compileLoops(aiOutput, steps, session),
-    variables: session.variables,
-    expectedOutcome: compileOutcome(session),
-    compilationMetadata: {
-      compiledAt: new Date().toISOString(),
-      ...(instruction
-        ? { promptVersion: PROMPT_VERSION, model: "mock-gpt-5.6" }
-        : {}),
-      modelCalls: 0,
-      ...(aiPayload
-        ? { payloadSha256: sha256(JSON.stringify(aiPayload)) }
-        : {}),
-      diagnostics: [
-        {
-          level: "info",
-          code: instruction ? "MOCK_AI_ONLY" : "DIRECT_COMPILATION",
-          message: instruction
-            ? "Structured AI generalization was produced by a mock; no live model call occurred."
-            : "The literal demonstration compiled locally without GPT.",
-        },
-      ],
-      generatedPlaywright: generatePlaywright(workflowId, steps),
-    },
-  });
+  let workflow: CompiledWorkflow;
+  try {
+    workflow = CompiledWorkflowSchema.parse({
+      schemaVersion: "2.0.0",
+      id: workflowId,
+      version: "1.0.0",
+      sourceDemonstrationId: session.id,
+      compileMode,
+      pageContexts: session.pages.map((page) => ({
+        ...page,
+        resolutionOrder: [
+          "opener",
+          "origin-path",
+          "title",
+          "structural-fingerprint",
+          "landmark",
+          "page-role",
+        ],
+      })),
+      steps,
+      loops: compileLoops(aiOutput, steps, session),
+      variables: session.variables,
+      expectedOutcome,
+      compilationMetadata: {
+        compiledAt: new Date().toISOString(),
+        ...(instruction
+          ? { promptVersion: PROMPT_VERSION, model: "mock-gpt-5.6" }
+          : {}),
+        modelCalls: 0,
+        ...(aiPayload
+          ? { payloadSha256: sha256(JSON.stringify(aiPayload)) }
+          : {}),
+        diagnostics: [
+          {
+            level: "info",
+            code: instruction ? "MOCK_AI_ONLY" : "DIRECT_COMPILATION",
+            message: instruction
+              ? "Structured AI generalization was produced by a mock; no live model call occurred."
+              : "The literal demonstration compiled locally without GPT.",
+          },
+        ],
+        generatedPlaywright: generatePlaywright(workflowId, steps),
+      },
+    });
+  } catch (error) {
+    throw compilationStageError("artifact-validation", error);
+  }
   return { workflow, ...(aiPayload ? { aiPayload } : {}) };
 }
