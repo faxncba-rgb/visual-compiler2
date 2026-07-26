@@ -119,6 +119,14 @@ function canonicalMatches(pageUrl: string, context: CompiledPageContext) {
   }
 }
 
+function runtimeTitlePattern(value: string) {
+  return value
+    .replaceAll(/\d+/g, "\\d+")
+    .replaceAll(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+
 function selectedFirst(step: CompiledStep) {
   const ranked = rankLocatorCandidates(step.locatorCandidates);
   const selected = ranked.find(
@@ -455,13 +463,29 @@ export class DeterministicRuntime {
               .pages()
               .find((candidate) => !candidate.isClosed());
       if (!page) throw new Error("Parent page for frame is unavailable.");
-      const frame = page
-        .frames()
-        .find((candidate) => canonicalMatches(candidate.url(), pageContext));
-      if (!frame)
+      const identity = step.target?.descriptor?.frame ?? step.target?.frame;
+      const candidates: Frame[] = [];
+      for (const candidate of page.frames()) {
+        if (
+          candidate === page.mainFrame() ||
+          candidate.isDetached() ||
+          !canonicalMatches(candidate.url(), pageContext)
+        )
+          continue;
+        if (identity?.name && candidate.name() !== identity.name) continue;
+        if (identity?.title) {
+          const title = await candidate.title().catch(() => "");
+          if (runtimeTitlePattern(title) !== identity.title) continue;
+        }
+        candidates.push(candidate);
+      }
+      if (candidates.length !== 1)
         throw new Error(
-          `Same-origin frame ${pageContext.origin}${pageContext.pathname} is unavailable.`,
+          candidates.length === 0
+            ? `Same-origin frame ${pageContext.origin}${pageContext.pathname} is unavailable.`
+            : `Same-origin frame ${pageContext.origin}${pageContext.pathname} is ambiguous.`,
         );
+      const frame = candidates[0]!;
       this.#pages.resolved.set(pageContext.id, frame);
       return frame;
     }

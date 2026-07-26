@@ -380,8 +380,7 @@ test.describe("editor strategies", () => {
         await page.evaluate(() => {
           const iframe = document.createElement("iframe");
           iframe.title = "Opaque cross-origin support";
-          iframe.src =
-            "http://localhost:4273/fixture/cross-origin?patient=must-redact";
+          iframe.src = `http://localhost:${location.port}/fixture/cross-origin?patient=must-redact`;
           document.body.append(iframe);
         });
         await page

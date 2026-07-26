@@ -1013,6 +1013,9 @@ export class DemonstrationRecorder {
     page.on("framenavigated", (frame) => {
       void frame.evaluate(RECORDER_INIT_SCRIPT).catch(() => undefined);
     });
+    page.on("frameattached", (frame) => {
+      void frame.evaluate(RECORDER_INIT_SCRIPT).catch(() => undefined);
+    });
     page.on("domcontentloaded", () => {
       void page.evaluate(RECORDER_INIT_SCRIPT).catch(() => undefined);
     });

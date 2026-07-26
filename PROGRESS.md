@@ -2,15 +2,15 @@
 
 ## Current milestone
 
-Milestone 15.2 — editing transactions and final-value capture.
+Milestone 15.3 — live page, frame and popup reacquisition.
 
 ## Milestone objective
 
-- Persist authorized demonstrated text as a first-class workflow literal.
-- Capture an editable target on focus and retain every final value independently
-  of the lifetime of its DOM node.
-- Consolidate input, change, composition, paste, key and selection signals into
-  one editing action.
+- Instrument frames attached after Teaching starts.
+- Reacquire a detached/replaced frame by canonical origin/path plus semantic
+  name/title identity.
+- Reject absent or ambiguous live frame contexts instead of silently using the
+  first match.
 
 ## Milestone 15.1 finding
 
@@ -46,6 +46,29 @@ Milestone 15.2 — editing transactions and final-value capture.
   post-entry verification.
 - Copy/paste still records a typed literal rather than memory-only dataflow.
 - Workflow Library and automatic Teaching trace remain to be implemented.
+
+## Milestone 15.3 implementation
+
+- Added recorder installation on every `frameattached` event in addition to
+  context init scripts and navigation hooks.
+- Kept recorded page/frame identities structural and reacquired fresh live
+  Playwright roots after detachment.
+- Strengthened runtime frame resolution with origin, canonical pathname,
+  frame name and normalized title, with honest failure for zero or multiple
+  matches.
+
+## Milestone 15.3 validation
+
+- TypeScript build and locator-resolution unit suite: passed.
+- Same-origin editor-frame replacement and cross-origin opacity E2E: passed.
+- Popup action, closure/return and unexpected-popup failure E2E: passed.
+
+## Remaining after Milestone 15.3
+
+- Page/frame structural reacquisition is limited to same-origin content and
+  known canonical identities; cross-origin internals intentionally remain
+  opaque.
+- Deterministic input strategy fallback and value verification are next.
 
 ## Completed
 
