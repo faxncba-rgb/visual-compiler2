@@ -54,7 +54,7 @@ test("test mode opens the configured local target automatically with recording o
   await expect(page.locator("#browserStatus")).toHaveText("OPEN");
   await expect(page.locator("#recorderStatus")).toHaveText("OFF");
   await expect(page.locator("#canonicalPage")).toHaveText(
-    "http://127.0.0.1:4273/fixture",
+    `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture`,
   );
   await expect(
     page.getByRole("button", { name: "Start teaching", exact: true }),

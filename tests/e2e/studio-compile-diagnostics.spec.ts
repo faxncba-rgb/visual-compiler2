@@ -133,6 +133,11 @@ test("the recorder remains browser-serializable under the exact tsx dev loader",
   expect(stderr).not.toMatch(/ReferenceError|__name|page\.evaluate/);
   expect(JSON.parse(stdout.trim())).toEqual({
     fillCount: 1,
+    fillValue: {
+      kind: "literal",
+      value: "SYNTHETIC-DEV-MODE-CALLBACK",
+      persistence: "workflow",
+    },
     stable: "stable",
     historyCount: 1,
     saveLinkedToFill: true,
@@ -166,15 +171,14 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
     expect(
       controller.session?.actions.map((action) => action.sequence),
     ).toEqual(controller.session?.actions.map((_, index) => index + 1));
-    expect(controller.session?.outcomeCandidates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "new-item-contains-variable",
-          variableRef: "{{consultation_text}}",
-          observed: true,
-        }),
-      ]),
-    );
+    expect(
+      controller.session?.actions.find((action) => action.action === "fill")
+        ?.value,
+    ).toEqual({
+      kind: "literal",
+      value: demonstratedValue,
+      persistence: "workflow",
+    });
     expect(
       controller.session?.outcomeCandidates.filter(
         (candidate) => candidate.selected,
@@ -185,7 +189,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
         required: true,
       }),
     ]);
-    expect(JSON.stringify(controller.session)).not.toContain(demonstratedValue);
+    expect(JSON.stringify(controller.session)).toContain(demonstratedValue);
 
     await page.getByRole("button", { name: "Compile", exact: true }).click();
 
@@ -316,20 +320,12 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
         selectedSaveLocator!.rule,
       ).evaluate((element) => element.tagName.toLowerCase()),
     ).toBe("a");
-    expect(JSON.stringify(controller.workflow)).not.toContain(
-      demonstratedValue,
-    );
-    const replayValue = "SYNTHETIC-UPDATED-RUNTIME-VALUE";
+    expect(JSON.stringify(controller.workflow)).toContain(demonstratedValue);
     await page.locator("#advancedDetails > summary").click();
-    const localValueInput = page.getByLabel("consultation_text local value", {
-      exact: true,
-    });
-    await localValueInput.fill(replayValue);
-    await localValueInput.blur();
-    await expect
-      .poll(() => controller.localValues.consultation_text)
-      .toBe(replayValue);
-    expect(JSON.stringify(controller.workflow)).not.toContain(replayValue);
+    await expect(
+      page.getByLabel("consultation_text local value", { exact: true }),
+    ).toHaveCount(0);
+    expect(controller.localValues).toEqual({});
 
     const saveCountBeforeRun = Number(
       await controller.browser.mainPage
@@ -364,7 +360,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       controller.browser.mainPage
         .locator("[data-vc-consultation-history] > li")
         .last(),
-    ).toContainText(replayValue);
+    ).toContainText(demonstratedValue);
     expect(controller.telemetry).toMatchObject({
       state: "Passed",
       llmCalls: 0,
@@ -624,7 +620,7 @@ test("popup completion without a relative history increment fails Run locally", 
     await page.getByRole("button", { name: "Compile", exact: true }).click();
     await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
     await controller.browser.navigate(
-      "http://127.0.0.1:4273/fixture?variant=B&noHistory=1",
+      `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture?variant=B&noHistory=1`,
     );
     await page
       .getByRole("button", { name: "Run locally", exact: true })
@@ -804,13 +800,13 @@ test("the last completed synthetic demonstration restores after a Studio restart
         readFile(path.join(persistedDirectory, "variables.json"), "utf8"),
         readFile(path.join(persistedDirectory, "metadata.json"), "utf8"),
       ]);
-      expect(sessionText).not.toContain(demonstratedValue);
+      expect(sessionText).toContain(demonstratedValue);
       expect(metadataText).not.toContain(demonstratedValue);
       expect(metadataText).not.toContain("?variant=");
       expect(metadataText).not.toMatch(
         /cookie|token|authorization|authenticationState/i,
       );
-      expect(variablesText).toContain(demonstratedValue);
+      expect(JSON.parse(variablesText)).toEqual({});
       expect(controller.snapshot().lastDemonstration).toMatchObject({
         available: true,
         outcomeEvidenceCompatible: true,
@@ -820,7 +816,7 @@ test("the last completed synthetic demonstration restores after a Studio restart
 
       const incompatibleController = new StudioController(rootDirectory, {
         testMode: true,
-        targetUrl: "http://127.0.0.1:4273/fixture?variant=B",
+        targetUrl: `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture?variant=B`,
       });
       const incompatibleServer = createStudioServer(incompatibleController);
       try {
@@ -843,7 +839,7 @@ test("the last completed synthetic demonstration restores after a Studio restart
 
       const restoredController = new StudioController(rootDirectory, {
         testMode: true,
-        targetUrl: "http://127.0.0.1:4273/fixture?variant=A",
+        targetUrl: `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture?variant=A`,
       });
       const restoredServer = createStudioServer(restoredController);
       try {

@@ -2,14 +2,15 @@
 
 ## Current milestone
 
-Milestone 15.7 — automatic forensic Teaching trace.
+Milestone 15.8 — full recorder, security and end-to-end validation.
 
 ## Milestone objective
 
-- Start and close a local structural trace with the normal Teaching lifecycle.
-- Keep typed/copied values, authentication and query parameters out of JSONL.
-- Reference the latest trace from persistent diagnostics when a demonstration
-  is missing or rejected.
+- Exercise every required editing, frame, popup, dataflow, library and
+  persistent-diagnostic path with local synthetic fixtures.
+- Verify exact development-loader behavior without recorder serialization
+  regressions.
+- Keep the real DPI and OpenAI outside all automated validation.
 
 ## Milestone 15.1 finding
 
@@ -171,6 +172,38 @@ Milestone 15.7 — automatic forensic Teaching trace.
 - Structural trace metadata cannot inspect cross-origin frame contents.
 - Full-suite validation, repository scans and documentation remain.
 
+## Milestone 15.8 implementation
+
+- Removed timing cushions from recorder regressions so edit commits are tested
+  at the actual click and Stop teaching boundaries.
+- Added composition-event consolidation, popup literal editing and exact
+  persisted-literal assertions.
+- Parameterized the local E2E ports so validation can run without disturbing an
+  already-running Studio.
+- Extended diagnostic redaction to authorized session literals before a
+  workflow exists, while preserving those literals in the local executable
+  artifact.
+- Updated persistence and security regressions for the explicit
+  `literal/workflow` versus `runtime-variable/memory-only` contract.
+
+## Milestone 15.8 validation
+
+- `npm run build`: passed.
+- `npm test`: 49/49 passed across 8 files.
+- `npm run test:security`: 7/7 passed.
+- `npm run test:e2e`: 29/29 passed against local ports 3101/4274.
+- Exact `tsx` development-loader recorder smoke: one durable literal fill,
+  linked save and stable post-action state.
+- In-app browser inspection: primary OPEN → TEACH → COMPILE → RUN flow
+  preserved; Workflow name and Saved workflows remain secondary controls;
+  runtime LLM/OpenAI counters remain zero.
+
+## Remaining after Milestone 15.8
+
+- Documentation, clean-install revalidation and final repository/artifact scans
+  remain.
+- The real DPI remains an explicit manual operator retest.
+
 ## Completed
 
 - Replaced fixture/profile selection with one OPEN → TEACH → COMPILE → RUN
@@ -205,9 +238,9 @@ Milestone 15.7 — automatic forensic Teaching trace.
 ## Validation
 
 - `npm run build`: passed.
-- `npm test`: 48/48 passed across 8 files.
+- `npm test`: 49/49 passed across 8 files.
 - `npm run test:security`: 7/7 passed.
-- `npm run test:e2e`: 23/23 passed.
+- `npm run test:e2e`: 29/29 passed.
 
 ## Deliberate boundaries
 

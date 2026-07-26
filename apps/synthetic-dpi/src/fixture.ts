@@ -281,11 +281,12 @@ export function renderPopupWorkflow() {
     document.querySelector('[data-vc-open-popup]').addEventListener('click', () => {
       window.open('/fixture/popup-action', 'vc2-action-popup', 'width=520,height=360');
     });
-    window.__popupActionDone = function(value) {
+    window.__popupActionDone = function(value, note) {
       const status = document.querySelector('[data-vc-outcome]');
       status.dataset.vcOutcome = 'success';
       status.className = 'status success';
       status.textContent = 'Option ' + value + ' validée dans la popup.';
+      document.body.dataset.vcPopupNote = note;
     };
   </script></body></html>`;
 }
@@ -294,12 +295,15 @@ export function renderPopupAction() {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Choix de validation synthétique</title>
   <style>${baseStyles}</style></head><body><div class="lab">LAB MODE — SYNTHETIC ONLY</div>
   <main><section aria-labelledby="popup-heading"><h1 id="popup-heading">Validation détaillée</h1>
+  <label for="popup-note">Note synthétique popup</label>
+  <input id="popup-note" name="popup_note" type="text">
   <label for="decision">Décision synthétique</label>
   <select id="decision" name="decision"><option value="">Choisir</option><option value="A">Option A</option><option value="B">Option B</option></select>
   <button type="button" data-vc-confirm>Valider et fermer</button></section></main>
   <script>document.querySelector('[data-vc-confirm]').addEventListener('click', () => {
     const value = document.querySelector('#decision').value;
-    if (window.opener && !window.opener.closed) window.opener.__popupActionDone(value);
+    const note = document.querySelector('#popup-note').value;
+    if (window.opener && !window.opener.closed) window.opener.__popupActionDone(value, note);
     setTimeout(() => window.close(), 180);
   });</script></body></html>`;
 }

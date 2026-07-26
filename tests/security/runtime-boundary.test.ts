@@ -87,7 +87,10 @@ describe("zero-OpenAI runtime boundary", () => {
     const config = await readFile(path.resolve("playwright.config.ts"), "utf8");
     expect(config).toContain("VC_TEST_MODE=1");
     expect(config).toContain(
-      "VISUAL_COMPILER_TEST_TARGET_URL='http://127.0.0.1:4273/fixture?variant=A'",
+      'const fixtureOrigin = `http://127.0.0.1:${fixturePort}`',
+    );
+    expect(config).toContain(
+      "VISUAL_COMPILER_TEST_TARGET_URL='${fixtureOrigin}/fixture?variant=A'",
     );
     expect(config).not.toContain("VISUAL_COMPILER_TARGET_URL=");
   });

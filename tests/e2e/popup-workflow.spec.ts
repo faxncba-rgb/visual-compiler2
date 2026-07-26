@@ -30,6 +30,10 @@ test("records and replays an action inside a popup, closure, and return to opene
           })),
         )
         .toEqual({ installed: true, binding: "function" });
+      const popupLiteral = "SYNTHETIC-POPUP-LITERAL";
+      await popup
+        .getByLabel("Note synthétique popup", { exact: true })
+        .fill(popupLiteral);
       await popup.getByLabel("Décision synthétique").selectOption("A");
       await expect
         .poll(() => recorder.session.actions.map((action) => action.action))
@@ -45,6 +49,15 @@ test("records and replays an action inside a popup, closure, and return to opene
       expect(session.actions).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ action: "popup-open" }),
+          expect.objectContaining({
+            action: "fill",
+            pageContextId: expect.stringMatching(/^page-/),
+            value: {
+              kind: "literal",
+              value: popupLiteral,
+              persistence: "workflow",
+            },
+          }),
           expect.objectContaining({
             action: "select",
             pageContextId: expect.stringMatching(/^page-/),
@@ -83,6 +96,9 @@ test("records and replays an action inside a popup, closure, and return to opene
       await expect(
         page.getByText("Option A validée dans la popup."),
       ).toBeVisible();
+      expect(await page.getAttribute("body", "data-vc-popup-note")).toBe(
+        popupLiteral,
+      );
       expect(page.isClosed()).toBe(false);
       expect(
         browser.context.pages().filter((candidate) => !candidate.isClosed()),

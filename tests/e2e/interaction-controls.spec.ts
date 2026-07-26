@@ -10,7 +10,6 @@ test("records temporal typing, meaningful keys, checkbox, dropdown and menu acti
       const note = page.getByLabel("Synthetic note", { exact: true });
       await note.click();
       await note.pressSequentially("ordinary typing");
-      await page.waitForTimeout(380);
       await note.press("Tab");
       await page.getByLabel("Enable tracking", { exact: true }).check();
       await page.getByLabel("Priority", { exact: true }).selectOption("high");
@@ -55,6 +54,13 @@ test("records temporal typing, meaningful keys, checkbox, dropdown and menu acti
       expect(
         humanActions.filter((action) => action.action === "fill"),
       ).toHaveLength(1);
+      expect(
+        humanActions.find((action) => action.action === "fill")?.value,
+      ).toEqual({
+        kind: "literal",
+        value: "ordinary typing",
+        persistence: "workflow",
+      });
       expect(humanActions).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ action: "keyboard", key: "Tab" }),
@@ -96,6 +102,49 @@ test("records temporal typing, meaningful keys, checkbox, dropdown and menu acti
         ]),
       );
       expect(session.outcomeVerification).toBe("VERIFIED");
+    },
+  );
+});
+
+test("composition and Stop consolidate the focused edit into one committed transaction", async () => {
+  await withManagedBrowser(
+    `${fixtureOrigin}/fixture/controls`,
+    async ({ page, recorder }) => {
+      const value = "texte composé synthétique";
+      await recorder.start();
+      const note = page.getByLabel("Synthetic note", { exact: true });
+      await note.focus();
+      await note.dispatchEvent("compositionstart", { data: "" });
+      await note.dispatchEvent("compositionupdate", { data: value });
+      await note.evaluate((element, nextValue) => {
+        const input = element as HTMLInputElement;
+        input.value = nextValue;
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: "insertCompositionText",
+            data: nextValue,
+          }),
+        );
+        input.dispatchEvent(
+          new CompositionEvent("compositionend", {
+            bubbles: true,
+            data: nextValue,
+          }),
+        );
+      }, value);
+      const session = await recorder.stop();
+      const fills = session.actions.filter((action) => action.action === "fill");
+      expect(fills).toHaveLength(1);
+      expect(fills[0]?.value).toEqual({
+        kind: "literal",
+        value,
+        persistence: "workflow",
+      });
+      expect(fills[0]?.editingTransaction).toMatchObject({
+        committed: true,
+        compositionObserved: true,
+      });
     },
   );
 });

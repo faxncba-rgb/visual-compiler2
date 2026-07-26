@@ -1072,6 +1072,9 @@ export class StudioController {
   ) {
     const sensitiveValues = [
       ...Object.values(this.localValues).map(String),
+      ...(this.session?.actions.flatMap((action) =>
+        action.value?.kind === "literal" ? [action.value.value] : [],
+      ) ?? []),
       ...(this.workflow?.steps.flatMap((step) =>
         step.value?.kind === "literal" ? [step.value.value] : [],
       ) ?? []),

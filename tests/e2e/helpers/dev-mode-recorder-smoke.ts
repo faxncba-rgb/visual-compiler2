@@ -38,14 +38,7 @@ try {
   console.log(
     JSON.stringify({
       fillCount: fills.length,
-      actions: session.actions.map((action) => ({
-        action: action.action,
-        name: action.name,
-        sequence: action.sequence,
-        value: action.value,
-        valueRef: action.valueRef,
-        linkedToFill: action.sequenceContext?.savesPreviousEditor,
-      })),
+      fillValue: fills[0]?.value,
       stable: session.effectReconciliation?.status,
       historyCount: session.applicationStateAfter?.historyCount,
       saveLinkedToFill: save?.sequenceContext?.savesPreviousEditor,
