@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+.env
+.env.*
+!.env.example
+browser-profiles/*
+!browser-profiles/.gitkeep
+local-data/*
+!local-data/.gitkeep
+demonstrations/*.json
+compiled-workflows/*.json
+!compiled-workflows/.gitkeep
+*.log
