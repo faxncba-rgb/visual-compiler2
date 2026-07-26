@@ -1,129 +1,127 @@
 # Architecture
 
-Visual Compiler 2 is demonstration-first. The demonstrated DOM element is the
-primary evidence; natural-language generalization can refine a validated
-workflow but cannot replace that target with an unrelated generic control.
+Visual Compiler 2 is a local demonstration compiler with one primary path:
+**automatic browser open → explicit teaching → compilation → deterministic
+local replay**.
 
 ```mermaid
-flowchart TD
-  Studio[Local Studio on 127.0.0.1] --> Browser[Persistent managed browser]
-  Browser --> Recorder[High-level recorder]
-  Recorder --> Graph[Page Context Graph]
-  Recorder --> DIR[Validated Demonstration IR]
-  DIR --> Variables[Local value parameterization]
-  DIR --> Direct[Direct demonstration compiler]
-  DIR -. redacted structure + explicit instructions .-> MockAI[Mock AI generalization]
-  Direct --> Artifact[Versioned compiled artifact]
-  MockAI --> Artifact
-  Artifact --> Runtime[Deterministic Playwright runtime]
-  Runtime --> Outcome[Application-level outcome checks]
-  Runtime --> Telemetry[Redacted zero-LLM telemetry]
-  Artifact --> Animation[Optional animation callbacks]
-  Animation --> Runtime
+flowchart LR
+  Studio["Studio (127.0.0.1)"] --> Browser["Dedicated managed Chromium"]
+  Browser --> Recorder["Temporal/causal recorder"]
+  Recorder --> Graph["Page Context Graph"]
+  Recorder --> IR["Validated Demonstration IR"]
+  IR --> Compiler["Direct compiler"]
+  IR -. "redacted structure + explicit instruction" .-> Mock["Validated mock generalizer"]
+  Compiler --> Artifact["Versioned artifact"]
+  Mock --> Artifact
+  Artifact --> Runtime["Deterministic runtime"]
+  Runtime --> Outcome["Verified / unverified result"]
+  Runtime --> Telemetry["llmCalls=0, openAIRequests=0"]
 ```
 
-## Managed browser
+## Configuration and managed browser
 
-`packages/managed-browser` owns one persistent Playwright `BrowserContext`.
-Authentication and initial navigation are manual, recording is inactive until
-the operator explicitly starts teaching, and the profile remains local and
-Git-ignored. Context hooks discover pages, popups, dialogs, navigation, focus
-changes, and frames. Query strings may be used by the live page but are removed
-from every persisted identity.
+Normal Lab Mode defaults to `https://dpi-ncba.gbna-sante.fr/`. Test mode
+requires `VISUAL_COMPILER_TEST_TARGET_URL` to be an explicit `http://localhost`
+or `http://127.0.0.1` URL. This validation occurs before browser startup.
+
+Studio initializes one persistent Playwright context automatically. Its profile
+is isolated under `.local/browser-profile/`, Git-ignored and permissioned
+`0700` where supported. Authentication is manual inside Chromium and recording
+is inactive until **Start teaching**. Closing the main page changes browser
+status to closed; reopening creates a fresh managed context using the same
+dedicated local profile.
+
+Browser status exposes only a canonical origin/path. Query strings may exist in
+browser memory for the live session but are removed from persisted identities.
+
+## Temporal and causal recorder
+
+The browser initialization script observes high-level click, double-click,
+input, change, meaningful key and submit events. Pointer noise is ignored;
+typing bursts debounce into one fill; checkbox input/change noise is represented
+by one check/uncheck action. Nested click targets are promoted to the closest
+actionable ancestor.
+
+Each recorded action contains:
+
+- monotonic sequence and time offset;
+- stable page/frame context ID;
+- raw-target promotion evidence and normalized actionable target;
+- semantic descriptor and compatible action family;
+- resulting redacted structural snapshot;
+- bounded DOM-reaction effects;
+- a causal action ID for subsequent popup/navigation/frame events.
+
+After every meaningful action, the recorder runs bounded DOM-quiet detection.
+Stop teaching performs a final bounded reconciliation and associates late
+popup, navigation, iframe replacement, history, reset, success and error
+effects with the last causal action.
 
 ## Page Context Graph
 
-`packages/page-context-graph` assigns stable recording-session IDs to main
-pages, tabs, popups, and frames. Nodes record canonical origin/path, role,
-opener/parent relationship, title pattern, structural fingerprint, and
-landmarks. Page resolution never depends only on array position.
+`packages/page-context-graph` owns stable semantic identities for the main page,
+tabs, popups and frames. Nodes contain role, opener/parent relationship,
+canonical origin/path, title pattern, structural fingerprint, landmarks and
+lifecycle state. Runtime reacquires live Playwright objects from those
+descriptions; `Page` and `Frame` objects are never serialized as identity.
+Cross-origin frame contents remain opaque.
 
-```mermaid
-flowchart TD
-  Main["Main page (page-main)"] -->|Enregistrer| Popup["Validation popup (page-validation)"]
-  Popup --> Closed[Popup closes]
-  Closed --> Main
-  Main --> Frame["Same-origin editor frame (frame-editor)"]
-  Main --> Opaque["Cross-origin frame (opaque lifecycle only)"]
-```
+## Targets, values and locators
 
-## Recorder
+Target descriptors include control family, role/name/label, static text,
+editable/readonly/enabled/checked/selected state, form and semantic container,
+siblings and nearby labels, page/frame evidence, stable and unstable attributes
+and secondary bounds.
 
-An initialization script observes high-level `click`, `dblclick`, `input`,
-`change`, `keydown`, and `submit` events. Low-level pointer events are not
-recorded. Input bursts are debounced into a single fill action. Server-side
-deduplication collapses duplicate change/click reports. Password targets and
-cross-origin frame content are rejected before an action enters the session.
-
-Each demonstrated target includes semantic role/name, label, tag/input type,
-editability, visibility, enabled/readonly state, form and container ownership,
-neighbors, bounds, frame/page identity, stable attributes, a structural path,
-and before/after fingerprints. Coordinates are evidence only.
-
-## Demonstration IR and variables
-
-`packages/demonstration-ir` defines Zod schemas for sessions, targets, graph
-nodes, actions/effects, candidates, variables, steps, pre/postconditions,
-outcomes, loops, diagnostics, artifacts, and telemetry. No unvalidated model or
-disk input reaches runtime.
-
-Typed values are converted to named references such as
-`{{consultation_text}}`. Definitions are in the artifact; values are written to
-the separate Git-ignored local-value store. A user can intentionally keep a
-local literal or explicitly include a value in an AI instruction, but neither
-choice happens silently.
-
-## Locator engine
-
-The exact demonstrated target is converted into several deterministic
-candidates. Ranking favors:
+The locator engine ranks accessibility and stable structural evidence:
 
 1. role and accessible name;
 2. label association;
-3. stable form-control name;
+3. form-control name;
 4. semantic container plus role/name;
-5. text/DOM relationship;
-6. form ownership and stable neighboring labels;
-7. same-row/same-column relationship;
-8. stable application attributes;
-9. structural fallback in the demonstrated container.
+5. text/DOM and form relationships;
+6. neighbor and row/column evidence;
+7. stable application attributes;
+8. structural fallback.
 
-The engine records match/visible/enabled/editable counts, confidence, stability,
-explanation, and fallback order. Non-unique or type-incompatible candidates are
-rejected. Absolute coordinates are not compiled in the MVP.
+Ambiguous, invisible, disabled or type-incompatible targets fail compilation
+with structural counts and rejection reasons. Coordinates are not compiled.
 
-## Compiler
+Demonstrated values become local variable references. Semantic artifacts,
+Git-ignored local values and optional AI instructions are separate. Values do
+not enter the redacted AI preview by default.
 
-The direct compiler faithfully translates simple demonstrations without GPT.
-When the user provides generalization text, only the redacted demonstration and
-that explicit text enter the versioned mock provider. Structured output is
-parsed with Zod. The model boundary returns semantic decisions, never unchecked
-Playwright source. Compiler modes are explicit:
+## Compiler and outcome model
 
-- `direct-demonstration`
-- `mock-ai-generalization`
-- `live-gpt-generalization` (schema-defined but not enabled)
+The direct compiler translates a stopped demonstration without GPT. Optional
+generalization is currently handled by a strict, schema-validated mock that
+makes no model request.
+
+Compilation requires at least one executable target action, but does not
+require positive outcome evidence. The compiler selects only the strongest
+observed candidate. An artifact outcome carries `VERIFIED`,
+`PARTIALLY_VERIFIED` or `UNVERIFIED`; positive checks are required only for a
+verified outcome.
 
 ## Deterministic runtime
 
-`packages/deterministic-runtime` receives an existing browser context, a
-validated artifact, and local values. It resolves semantic page/frame contexts,
-checks preconditions, executes the action, manages expected popup/dialog
-lifecycles, verifies postconditions, and requires positive application outcome
-evidence. It supports AbortSignal-based Stop and repeat runs.
+Local and animated modes load the same artifact into the same engine. Animation
+is only a callback layer; local mode supplies none. The runtime reacquires page,
+frame and popup contexts, resolves semantic locators, executes chronological
+actions, checks known negative evidence and evaluates the compiled outcome.
 
-Bounded loops stop on missing next item, duplicate row fingerprints, configured
-maximum iterations, duration, first required failure, or user Stop. Defaults
-are 100 iterations and ten minutes.
+An artifact produces `Passed` only with verified positive evidence. Successful
+actions with partial/no positive evidence produce `CompletedUnverified`.
+Action, locator or known application-error failures produce `Failed`.
+AbortSignal produces `Stopped`.
 
-Animated and local execution call the same engine and artifact. Animation is a
-callback layer that highlights and delays before actions; local mode supplies no
-animation callbacks.
+## Diagnostics and isolation
 
-## OpenAI isolation
+Studio normalizes every error into one redacted persistent diagnostic. The same
+object drives the visible card, clipboard text, in-memory event history,
+`local-data/studio-events.jsonl` and terminal output.
 
-The runtime package does not import or depend on OpenAI. Its browser network
-guard aborts requests to OpenAI domains and records an attempted-policy failure,
-not a request. Compiler mocks make no network request. A future live adapter
-must remain in `packages/generalization-compiler`, require explicit confirmation,
-and accept only the redacted payload.
+The runtime has no OpenAI dependency. Managed browser routing blocks OpenAI
+HTTP and WebSocket endpoints and turns attempts into policy failures. No live
+AI adapter is enabled.

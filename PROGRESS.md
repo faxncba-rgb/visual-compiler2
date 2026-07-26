@@ -2,73 +2,50 @@
 
 ## Current milestone
 
-Milestone 13 — stable after-state reconciliation and relative application
-outcomes.
+Milestone 14 — simplified real Lab Mode.
 
 ## Completed
 
-- Read-only audit of Visual Compiler 1 and visual-compiler-next.
-- Dedicated TypeScript monorepo configuration.
-- Architecture, security, migration, and ADR foundations.
-- Synthetic legacy DPI layouts and editor/popup variants.
-- Initial managed browser, Page Context Graph, recorder, IR, locator,
-  compiler, runtime, and Studio implementation.
-- Direct demonstration compilation and strict mocked AI generalization.
-- Deterministic Run locally, optional animated presentation, Run again, and
-  AbortSignal Stop.
-- Positive outcome verification, negative error markers, unexpected-popup
-  failure, and OpenAI HTTP/WebSocket interception.
-- Polished local Studio, GitHub CI, visual QA screenshot, and manual test guide.
-- Stable `DemonstratedTargetDescriptor` evidence separated from ephemeral DOM,
-  generated ID/class, value, history, and page-instance identity.
-- Same-path live semantic frame resolution after the Legacy DPI save rerender.
-- Retry-safe compilation state, persistent redacted structural diagnostics, and
-  a targeted synthetic-fixture reset that preserves compiled workflows.
-- Browser-backed regressions for rerender/compile/run and 422 correction/retry
-  through the real Studio controls and managed-browser recorder.
-- Actionable-ancestor promotion for direct, nested span/image, and deterministic
-  legacy onclick click targets.
-- Safe static interface labels and sequence-aware fill-then-save locator
-  ranking, including scoped duplicate-name handling and fail-closed ambiguity.
-- Expanded locator diagnostics with step/action identity, normalized family,
-  promotion evidence, semantic-container counts and same-form counts.
-- Git-ignored persistence of the last completed synthetic demonstration with
-  session/value separation and profile/structural compatibility checks.
-- Studio restart restore controls and browser-backed compatible/incompatible
-  recovery coverage.
-- Bounded 500 ms DOM quiet-period reconciliation with a configurable five
-  second maximum, including late popup, frame replacement and page effects.
-- Privacy-safe application outcome candidates and an editable Studio evidence
-  review before compilation.
-- Relative scoped history increments with a fresh runtime baseline for every
-  Run locally and Run again.
-- Runtime checks for popup completion, canonical page return, editor reset,
-  Date/Heure invariants, known error markers, and missing history increments.
-- Redacted application-outcome diagnostics and negative browser regressions for
-  missing save, missing history, and early Stop reconciliation.
+- Replaced fixture/profile selection with one OPEN → TEACH → COMPILE → RUN
+  LOCALLY interface.
+- Added automatic managed-browser startup, DPI home return, reopen recovery and
+  a dedicated permission-restricted `.local/browser-profile/`.
+- Kept authentication manual and recording inactive until explicit Start
+  teaching.
+- Added monotonic action sequence, causal graph-event links, per-action bounded
+  reaction observation and resulting structural state.
+- Consolidated ordinary typing while preserving meaningful keys and shortcuts.
+- Added checked/selected target evidence and browser-backed checkbox, dropdown
+  and menu regressions.
+- Preserved actionable-ancestor promotion, dialogs, popup actions and closure,
+  same-origin iframe recording, frame replacement and live reacquisition.
+- Simplified outcome selection to the strongest observed evidence.
+- Allowed compilation and local execution without positive evidence.
+- Added VERIFIED, PARTIALLY_VERIFIED and UNVERIFIED artifacts, with PASSED
+  distinct from COMPLETED_UNVERIFIED.
+- Preserved known-error, unexpected-popup and missing required verified-outcome
+  failures.
+- Moved raw IR, payload, locators and logs into collapsed Advanced details.
+- Kept optional AI generalization collapsed and direct empty-instruction
+  compilation model-free.
+- Generalized persistent diagnostics across browser, compile, request and
+  runtime errors; added copy, clear, contextual retry, terminal and JSONL
+  persistence.
+- Migrated stored demonstrations to metadata version 2 and defaulted missing
+  outcome data to UNVERIFIED without deleting user files.
+- Forced automated Studio startup to an explicit local target.
 
-## Tests
+## Validation
 
 - `npm run build`: passed.
-- `npm test`: 47/47 passed across 8 files.
-- `npm run test:security`: 5/5 passed.
-- `npm run test:e2e`: 20/20 passed.
+- `npm test`: 48/48 passed across 8 files.
+- `npm run test:security`: 7/7 passed.
+- `npm run test:e2e`: 23/23 passed.
 
-## Demo readiness
+## Deliberate boundaries
 
-Ready for the bundled synthetic Lab Mode demonstration.
-
-## Known issues
-
-- Live GPT generalization is deliberately disabled; the MVP will use strict
-  mocked structured output.
-- The live GPT adapter remains deliberately out of scope until separately
-  authorized.
-- Cross-origin frames are opaque lifecycle contexts by design.
-- The repeated-row runtime exposes and tests the bounded loop engine; a rich
-  visual loop editor is planned after the MVP.
-
-## Next actions
-
-1. Publish only `codex/teach-by-demonstration-mvp`.
-2. Open the pull request toward `main` without merging it.
+- No live OpenAI adapter is enabled.
+- Runtime blocks OpenAI HTTP and WebSocket access.
+- Cross-origin frames remain opaque.
+- Automated tests use only local synthetic fixtures.
+- The real DPI test remains a manual operator step.
