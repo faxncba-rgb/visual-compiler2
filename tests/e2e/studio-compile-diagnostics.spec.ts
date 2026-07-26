@@ -404,18 +404,11 @@ test("Workflow Library auto-saves immutable versions, reloads after restart and 
     async ({ controller, rootDirectory, studioOrigin }) => {
       const workflowName = "Synthetic consultation workflow";
       const firstValue = "SYNTHETIC-LIBRARY-LITERAL-V1";
-      await teachLegacyLayoutA(
-        page,
-        controller,
-        studioOrigin,
-        firstValue,
-      );
+      await teachLegacyLayoutA(page, controller, studioOrigin, firstValue);
       await page
         .getByLabel("Workflow name", { exact: true })
         .fill(workflowName);
-      await page
-        .getByRole("button", { name: "Compile", exact: true })
-        .click();
+      await page.getByRole("button", { name: "Compile", exact: true }).click();
       await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
       await expect(
         page.getByLabel("Saved workflows", { exact: true }),
@@ -538,9 +531,7 @@ test("Teaching trace is automatic, structural and referenced by persistent missi
         /password|cookie|authorization|api[-_]?key|[?&]patient=/i,
       );
       expect(
-        await readFile(
-          path.join(firstTraceDirectory, "before.synthetic.png"),
-        ),
+        await readFile(path.join(firstTraceDirectory, "before.synthetic.png")),
       ).not.toHaveLength(0);
 
       await controller.clearDemonstration();

@@ -33,9 +33,8 @@ test("copy and paste compile to memory-only cross-page dataflow", async () => {
         persistence: "memory-only",
       });
       expect(
-        session.variables.find(
-          (variable) => variable.name === "copied_text_1",
-        )?.privacy,
+        session.variables.find((variable) => variable.name === "copied_text_1")
+          ?.privacy,
       ).toBe("runtime-derived");
       expect(JSON.stringify(session)).not.toContain(copiedContent);
 

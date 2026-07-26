@@ -604,10 +604,7 @@ export class DeterministicRuntime {
     value: string,
     strategy: NonNullable<CompiledStep["inputStrategies"]>[number],
   ) {
-    if (
-      strategy === "playwright-fill" ||
-      strategy === "contenteditable-fill"
-    ) {
+    if (strategy === "playwright-fill" || strategy === "contenteditable-fill") {
       await locator.fill(value, { timeout: this.#timeout });
       return;
     }
@@ -813,8 +810,7 @@ export class DeterministicRuntime {
       await locator.uncheck();
       if (await locator.isChecked())
         throw new Error("Toggle verification failed after uncheck.");
-    }
-    else if (step.action === "keyboard")
+    } else if (step.action === "keyboard")
       await locator.press(step.key ?? "Enter");
     else if (step.action === "submit") {
       await locator.evaluate((element) => {

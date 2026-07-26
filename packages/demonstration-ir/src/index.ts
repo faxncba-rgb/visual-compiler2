@@ -241,7 +241,10 @@ export const RecordedActionSchema = z.object({
   target: DemonstratedTargetSchema.optional(),
   sequenceContext: DemonstratedSequenceContextSchema.optional(),
   value: WorkflowActionValueSchema.optional(),
-  outputVariable: z.string().regex(/^[a-z][a-z0-9_]*$/).optional(),
+  outputVariable: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .optional(),
   valueRef: z.string().optional(),
   editingTransaction: z
     .object({
@@ -465,7 +468,10 @@ export const CompiledStepSchema = z.object({
   locatorCandidates: z.array(LocatorCandidateSchema),
   selectedLocatorId: z.string().optional(),
   value: WorkflowActionValueSchema.optional(),
-  outputVariable: z.string().regex(/^[a-z][a-z0-9_]*$/).optional(),
+  outputVariable: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .optional(),
   valueRef: z.string().optional(),
   localLiteral: z.string().optional(),
   inputStrategies: z

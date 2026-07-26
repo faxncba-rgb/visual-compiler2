@@ -1819,8 +1819,7 @@ export class DemonstrationRecorder {
               compositionObserved:
                 payload.editingTransaction.compositionObserved,
               pasteObserved: payload.editingTransaction.pasteObserved,
-              selectionObserved:
-                payload.editingTransaction.selectionObserved,
+              selectionObserved: payload.editingTransaction.selectionObserved,
             },
           }
         : {}),

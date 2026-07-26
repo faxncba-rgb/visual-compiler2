@@ -376,8 +376,7 @@ export class StudioController {
             id: action.editingTransaction.id,
             committed: action.editingTransaction.committed,
             inputEvents: action.editingTransaction.inputEvents,
-            compositionObserved:
-              action.editingTransaction.compositionObserved,
+            compositionObserved: action.editingTransaction.compositionObserved,
             pasteObserved: action.editingTransaction.pasteObserved,
           }
         : undefined,
@@ -473,20 +472,18 @@ export class StudioController {
         if (stored.schemaVersion === 1 && Array.isArray(stored.entries))
           this.workflowLibraryEntries.push(...stored.entries);
       } catch {
-        this.workflowLibraryStatus =
-          "Saved workflow index could not be read.";
+        this.workflowLibraryStatus = "Saved workflow index could not be read.";
       }
     }
-    const legacyDirectory = path.join(
-      this.rootDirectory,
-      "compiled-workflows",
-    );
+    const legacyDirectory = path.join(this.rootDirectory, "compiled-workflows");
     if (existsSync(legacyDirectory)) {
       for (const filename of await readdir(legacyDirectory)) {
         if (!filename.endsWith(".json")) continue;
         try {
           const workflow = CompiledWorkflowSchema.parse(
-            JSON.parse(await readFile(path.join(legacyDirectory, filename), "utf8")),
+            JSON.parse(
+              await readFile(path.join(legacyDirectory, filename), "utf8"),
+            ),
           );
           if (
             this.workflowLibraryEntries.some(
@@ -502,7 +499,9 @@ export class StudioController {
             version: 1,
             createdAt: workflow.compilationMetadata.compiledAt,
             updatedAt: workflow.compilationMetadata.compiledAt,
-            origins: [...new Set(workflow.pageContexts.map((entry) => entry.origin))],
+            origins: [
+              ...new Set(workflow.pageContexts.map((entry) => entry.origin)),
+            ],
             pathPatterns: [
               ...new Set(workflow.pageContexts.map((entry) => entry.pathname)),
             ],
@@ -530,7 +529,11 @@ export class StudioController {
     const name = value.replaceAll(/\s+/g, " ").trim();
     if (name.length > 100)
       throw new Error("Workflow name must not exceed 100 characters.");
-    if (/password|passcode|token|secret|cookie|authorization|api[-_ ]?key/i.test(name))
+    if (
+      /password|passcode|token|secret|cookie|authorization|api[-_ ]?key/i.test(
+        name,
+      )
+    )
       throw new Error("Workflow name contains a forbidden sensitive term.");
     return name;
   }

@@ -134,7 +134,9 @@ test("composition and Stop consolidate the focused edit into one committed trans
         );
       }, value);
       const session = await recorder.stop();
-      const fills = session.actions.filter((action) => action.action === "fill");
+      const fills = session.actions.filter(
+        (action) => action.action === "fill",
+      );
       expect(fills).toHaveLength(1);
       expect(fills[0]?.value).toEqual({
         kind: "literal",

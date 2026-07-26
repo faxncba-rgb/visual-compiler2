@@ -723,7 +723,9 @@ function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
         step.value?.kind === "literal"
           ? JSON.stringify(step.value.value)
           : `variables.${step.value?.kind === "runtime-variable" ? step.value.name : (step.valueRef?.slice(2, -2) ?? "value")}`;
-      lines.push(`  await ${generatedLocator(selected)}.fill(${generatedValue});`);
+      lines.push(
+        `  await ${generatedLocator(selected)}.fill(${generatedValue});`,
+      );
     } else if (step.action === "click" && selected) {
       lines.push(`  await ${generatedLocator(selected)}.click();`);
     } else if (step.action === "extract" && selected) {

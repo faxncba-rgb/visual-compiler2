@@ -16,8 +16,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command:
-      `VC_HEADLESS=1 VC_TEST_MODE=1 VC_STUDIO_PORT=${studioPort} VC_FIXTURE_PORT=${fixturePort} VISUAL_COMPILER_TEST_TARGET_URL='${fixtureOrigin}/fixture?variant=A' npm run dev`,
+    command: `VC_HEADLESS=1 VC_TEST_MODE=1 VC_STUDIO_PORT=${studioPort} VC_FIXTURE_PORT=${fixturePort} VISUAL_COMPILER_TEST_TARGET_URL='${fixtureOrigin}/fixture?variant=A' npm run dev`,
     url: `${studioOrigin}/api/health`,
     reuseExistingServer: false,
     timeout: 30_000,

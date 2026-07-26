@@ -22,9 +22,9 @@ try {
     .frameLocator('iframe[title="Éditeur de consultation"]')
     .getByLabel("Texte de consultation", { exact: true })
     .fill("SYNTHETIC-UNFINISHED-EDIT");
-  await page!.locator('iframe[title="Éditeur de consultation"]').evaluate(
-    (frame) => frame.remove(),
-  );
+  await page!
+    .locator('iframe[title="Éditeur de consultation"]')
+    .evaluate((frame) => frame.remove());
   const session = await recorder.stop();
   console.log(
     JSON.stringify({

@@ -24,16 +24,16 @@
     "node": ">=20"
   },
   "dependencies": {
-    "playwright": "1.55.0",
+    "playwright": "1.55.1",
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "@playwright/test": "1.55.0",
+    "@playwright/test": "1.55.1",
     "@types/node": "24.1.0",
     "eslint": "9.31.0",
     "prettier": "3.6.2",
     "tsx": "4.20.3",
     "typescript": "5.8.3",
-    "vitest": "3.2.4"
+    "vitest": "3.2.6"
   }
 }
