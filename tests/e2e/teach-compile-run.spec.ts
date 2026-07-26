@@ -307,9 +307,7 @@ test.describe("editor strategies", () => {
           await field.click();
           await field.fill(value);
           await page.waitForTimeout(380);
-          await page
-            .getByRole("button", { name: "Enregistrer", exact: true })
-            .click();
+          await page.getByText("Enregistrer", { exact: true }).click();
           await page
             .getByText("Consultation synthétique enregistrée.")
             .waitFor();
@@ -364,9 +362,7 @@ test.describe("editor strategies", () => {
           .getByLabel("Texte de consultation");
         await editor.fill("Iframe consultation value");
         await page.waitForTimeout(380);
-        await page
-          .getByRole("button", { name: "Enregistrer", exact: true })
-          .click();
+        await page.getByText("Enregistrer", { exact: true }).click();
         await page.getByText("Consultation synthétique enregistrée.").waitFor();
         const session = await recorder.stop();
         expect(JSON.stringify(session)).not.toContain("OPAQUE-CONTENT");

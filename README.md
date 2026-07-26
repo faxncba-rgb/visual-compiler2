@@ -72,9 +72,31 @@ action compatibility, accessibility semantics, form/container relationships
 and canonical frame context), not from a DOM object, generated ID/class, field
 value, history contents, or page-instance fingerprint.
 
+Click-like events are normalized to their actionable ancestor before they enter
+the demonstration IR. A click on the `<span>` or an image nested inside
+**Enregistrer**, for example, records the owning link rather than the nested
+node. The compiler then prefers an exact role/name, exact actionable text,
+same-form and same-container evidence in that order. The demonstrated
+fill-then-save relationship scopes duplicate action names and ambiguous
+unscoped matches still fail closed.
+
 The managed browser profile is stored only under `browser-profiles/` and is
 Git-ignored. Workflow values live separately under `local-data/` and are also
 Git-ignored.
+
+## Restore a completed demonstration
+
+When teaching stops, Studio stores the last completed synthetic demonstration
+under `local-data/last-demonstration/`. Structural session data, local runtime
+values and compatibility metadata use separate files. No query parameter,
+authentication state, cookie or token is stored. After a Studio restart:
+
+1. Open and authenticate the same synthetic profile.
+2. Confirm Studio reports the stored structure as compatible.
+3. Choose **Restore last demonstration**, then compile or retry directly.
+
+Restore is disabled and the backend refuses the operation if the synthetic
+profile or live structural fingerprint is incompatible.
 
 ## Browser and popup handling
 
@@ -96,10 +118,12 @@ local variables and instruction remain available, and **Retry compile** is
 enabled as soon as the HTTP request finishes. The persistent **Compilation
 diagnostics** panel remains until the next compile or an explicit Clear action.
 It includes the HTTP status, compiler stage, redacted message and, for locator
-rejections, structural counts and per-strategy rejection reasons. The same
-redacted diagnostic is appended to the local Studio event log and terminal.
-Form values, query parameters, cookies, tokens and authentication data are
-excluded.
+rejections, the step/action identity, actionable target family, raw-target
+promotion, static-name presence, form/container match counts, aggregate
+candidate counts and per-strategy rejection reasons. **Copy diagnostics**
+copies that same redacted record. The diagnostic is appended to the persistent
+local Studio event log and terminal. Form values, dynamic editor contents,
+query parameters, cookies, tokens and authentication data are excluded.
 
 ## AI generalization and local variables
 

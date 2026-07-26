@@ -42,6 +42,8 @@ export function target(
       role: "textbox",
       accessibleName: "Texte de consultation",
       associatedLabel: "Texte de consultation",
+      hasOnclick: false,
+      rawTargetPromoted: false,
       semanticContainer: {
         tag: "section",
         heading: "Consultation",

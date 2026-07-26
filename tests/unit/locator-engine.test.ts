@@ -8,6 +8,35 @@ import {
 } from "../../packages/locator-engine/src";
 import { candidate, target } from "../helpers/factories";
 
+function saveTarget() {
+  const value = target();
+  value.tag = "a";
+  value.role = "link";
+  value.accessibleName = "Enregistrer";
+  delete value.associatedLabel;
+  value.editable = false;
+  value.formName = "consultation-record";
+  value.stableAttributes = {
+    "data-vc-action": "save-consultation",
+  };
+  value.descriptor = {
+    ...value.descriptor!,
+    controlFamily: "link",
+    multiline: false,
+    editable: false,
+    actionCompatibility: ["click"],
+    tag: "a",
+    role: "link",
+    accessibleName: "Enregistrer",
+    normalizedStaticText: "Enregistrer",
+    hasOnclick: true,
+    rawTargetPromoted: true,
+    formName: "consultation-record",
+  };
+  delete value.descriptor.associatedLabel;
+  return value;
+}
+
 describe("demonstration-first locator engine", () => {
   it("preserves the exact consultation editor instead of choosing the first textbox", () => {
     const candidates = generateLocatorCandidates(target());
@@ -90,5 +119,158 @@ describe("demonstration-first locator engine", () => {
         semanticEquivalentFound: true,
       });
     }
+  });
+
+  it("generates named, exact-text and sequence-aware form locators instead of a generic link", () => {
+    const candidates = generateLocatorCandidates(saveTarget(), {
+      previousActionId: "action-fill",
+      previousAction: "fill",
+      demonstratedAfterPrevious: true,
+      sameForm: true,
+      sameSemanticContainer: true,
+      savesPreviousEditor: true,
+    });
+    expect(candidates[0]?.rule).toMatchObject({
+      strategy: "role-name",
+      role: "link",
+      name: "Enregistrer",
+    });
+    expect(candidates[1]?.rule).toMatchObject({
+      strategy: "text-dom-relation",
+      tagName: "a",
+      staticText: "Enregistrer",
+    });
+    expect(
+      candidates.find((entry) => entry.strategy === "form-ownership")?.rule,
+    ).toMatchObject({
+      formName: "consultation-record",
+      controlFamily: "link",
+      staticText: "Enregistrer",
+      sequencePreviousActionId: "action-fill",
+    });
+    expect(
+      candidates.some(
+        (entry) =>
+          entry.selectorPreview === "a" ||
+          entry.selectorPreview === "getByRole(link)",
+      ),
+    ).toBe(false);
+  });
+
+  it("ranks exact semantics before demonstrated form and shared-container fallbacks", () => {
+    const validated = generateLocatorCandidates(saveTarget(), {
+      previousActionId: "action-fill",
+      previousAction: "fill",
+      demonstratedAfterPrevious: true,
+      sameForm: true,
+      sameSemanticContainer: true,
+      savesPreviousEditor: true,
+    })
+      .filter((entry) =>
+        [
+          "role-name",
+          "text-dom-relation",
+          "form-ownership",
+          "container-role-name",
+        ].includes(entry.strategy),
+      )
+      .map((entry) => ({
+        ...entry,
+        matchCount: 1,
+        visibleCount: 1,
+        enabledCount: 1,
+        typeCompatibleCount: 1,
+        unique: true,
+      }));
+    expect(
+      rankLocatorCandidates(validated).map((entry) => entry.strategy),
+    ).toEqual([
+      "role-name",
+      "text-dom-relation",
+      "form-ownership",
+      "container-role-name",
+    ]);
+  });
+
+  it("selects the unique demonstrated-form Enregistrer among unrelated and global links", () => {
+    const selected = selectDemonstratedLocator(
+      [
+        candidate({
+          id: "global-role",
+          strategy: "role-name",
+          rule: {
+            strategy: "role-name",
+            role: "link",
+            name: "Enregistrer",
+          },
+          matchCount: 2,
+          visibleCount: 2,
+          enabledCount: 2,
+          typeCompatibleCount: 2,
+          unique: false,
+        }),
+        candidate({
+          id: "global-text",
+          strategy: "text-dom-relation",
+          rule: {
+            strategy: "text-dom-relation",
+            tagName: "a",
+            staticText: "Enregistrer",
+          },
+          matchCount: 2,
+          visibleCount: 2,
+          enabledCount: 2,
+          typeCompatibleCount: 2,
+          unique: false,
+        }),
+        candidate({
+          id: "same-form",
+          strategy: "form-ownership",
+          rule: {
+            strategy: "form-ownership",
+            formName: "consultation-record",
+            controlFamily: "link",
+            staticText: "Enregistrer",
+          },
+          editableCount: 0,
+        }),
+      ],
+      { target: saveTarget(), action: "click" },
+    );
+    expect(selected.id).toBe("same-form");
+  });
+
+  it("fails closed when Enregistrer remains ambiguous inside the demonstrated form", () => {
+    expect(() =>
+      selectDemonstratedLocator(
+        [
+          candidate({
+            strategy: "role-name",
+            matchCount: 2,
+            visibleCount: 2,
+            enabledCount: 2,
+            typeCompatibleCount: 2,
+            unique: false,
+          }),
+          candidate({
+            strategy: "text-dom-relation",
+            matchCount: 2,
+            visibleCount: 2,
+            enabledCount: 2,
+            typeCompatibleCount: 2,
+            unique: false,
+          }),
+          candidate({
+            strategy: "form-ownership",
+            matchCount: 2,
+            visibleCount: 2,
+            enabledCount: 2,
+            typeCompatibleCount: 2,
+            unique: false,
+          }),
+        ],
+        { target: saveTarget(), action: "click" },
+      ),
+    ).toThrow("no unique");
   });
 });

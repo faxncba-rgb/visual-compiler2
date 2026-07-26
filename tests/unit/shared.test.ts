@@ -31,6 +31,20 @@ describe("shared safety boundaries", () => {
     });
   });
 
+  it("preserves safe static interface labels through structural redaction", () => {
+    expect(
+      redactObject({
+        accessibleName: "Enregistrer",
+        normalizedStaticText: "Enregistrer",
+        neighboringLabels: ["Date", "Heure", "Consultation"],
+      }),
+    ).toEqual({
+      accessibleName: "Enregistrer",
+      normalizedStaticText: "Enregistrer",
+      neighboringLabels: ["Date", "Heure", "Consultation"],
+    });
+  });
+
   it("keeps safe Demonstration Session structure visible in Studio", () => {
     expect(
       redactObject({

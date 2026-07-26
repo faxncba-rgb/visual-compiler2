@@ -46,6 +46,11 @@ async function withIsolatedStudio(
   }
 }
 
+async function closeStudioServer(server: Server, controller: StudioController) {
+  await controller.browser.close().catch(() => undefined);
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
 async function teachLegacyLayoutA(
   page: Page,
   controller: StudioController,
@@ -86,9 +91,7 @@ async function teachLegacyLayoutA(
   await editor.click();
   await editor.pressSequentially(demonstratedValue);
   await managedPage.waitForTimeout(380);
-  await managedPage
-    .getByRole("button", { name: "Enregistrer", exact: true })
-    .click();
+  await managedPage.getByText("Enregistrer", { exact: true }).click();
   await managedPage
     .getByText("Consultation synthétique enregistrée.", { exact: true })
     .waitFor();
@@ -186,6 +189,49 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
     expect(JSON.stringify(selected!.rule)).not.toMatch(
       /Date|Heure|date_consultation|heure_consultation/,
     );
+    const saveStep = controller.workflow?.steps.find(
+      (step) =>
+        step.action === "click" &&
+        step.target?.descriptor?.normalizedStaticText === "Enregistrer",
+    );
+    const selectedSaveLocator = saveStep?.locatorCandidates.find(
+      (candidate) => candidate.id === saveStep.selectedLocatorId,
+    );
+    expect(saveStep?.target).toMatchObject({
+      tag: "a",
+      role: "link",
+      accessibleName: "Enregistrer",
+      descriptor: {
+        controlFamily: "link",
+        normalizedStaticText: "Enregistrer",
+        hasOnclick: true,
+        rawTargetPromoted: true,
+      },
+    });
+    expect(saveStep?.sequenceContext).toMatchObject({
+      previousAction: "fill",
+      demonstratedAfterPrevious: true,
+      sameForm: true,
+      sameSemanticContainer: true,
+      savesPreviousEditor: true,
+    });
+    expect(selectedSaveLocator).toMatchObject({
+      matchCount: 1,
+      visibleCount: 1,
+      enabledCount: 1,
+      typeCompatibleCount: 1,
+      rule: {
+        strategy: "role-name",
+        role: "link",
+        name: "Enregistrer",
+      },
+    });
+    expect(
+      await locatorForRule(
+        controller.browser.mainPage,
+        selectedSaveLocator!.rule,
+      ).evaluate((element) => element.tagName.toLowerCase()),
+    ).toBe("a");
     expect(JSON.stringify(controller.workflow)).not.toContain(
       demonstratedValue,
     );
@@ -295,6 +341,21 @@ test("a locator 422 exposes structural evidence and can be corrected and retried
     await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
       '"semanticEquivalentFound": true',
     );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"stepId": "step-',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"actionIndex":',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"normalizedActionableAncestorFamily": "multiline-text"',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"semanticContainerMatchCount":',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"sameFormMatchCount":',
+    );
     const retry = page.getByRole("button", {
       name: "Retry compile",
       exact: true,
@@ -314,6 +375,118 @@ test("a locator 422 exposes structural evidence and can be corrected and retried
     expect(controller.session?.actions.length).toBe(demonstratedActionCount);
     expect(controller.workflow?.compileMode).toBe("direct-demonstration");
   });
+});
+
+test("the last completed synthetic demonstration restores after a Studio restart only on a compatible profile", async ({
+  page,
+}) => {
+  await withIsolatedStudio(
+    async ({ controller, rootDirectory, studioOrigin }) => {
+      const demonstratedValue = "SYNTHETIC-RESTORED-DEMONSTRATION";
+      const original = await teachLegacyLayoutA(
+        page,
+        controller,
+        studioOrigin,
+        demonstratedValue,
+      );
+      const persistedDirectory = path.join(
+        rootDirectory,
+        "local-data",
+        "last-demonstration",
+      );
+      const [sessionText, variablesText, metadataText] = await Promise.all([
+        readFile(path.join(persistedDirectory, "session.json"), "utf8"),
+        readFile(path.join(persistedDirectory, "variables.json"), "utf8"),
+        readFile(path.join(persistedDirectory, "metadata.json"), "utf8"),
+      ]);
+      expect(sessionText).not.toContain(demonstratedValue);
+      expect(metadataText).not.toContain(demonstratedValue);
+      expect(metadataText).not.toContain("?variant=");
+      expect(metadataText).not.toMatch(
+        /cookie|token|authorization|authenticationState/i,
+      );
+      expect(variablesText).toContain(demonstratedValue);
+      await controller.browser.close();
+
+      const incompatibleController = new StudioController(rootDirectory);
+      const incompatibleServer = createStudioServer(incompatibleController);
+      try {
+        const incompatibleOrigin =
+          await listenOnEphemeralPort(incompatibleServer);
+        await page.goto(incompatibleOrigin);
+        await page
+          .getByLabel("Synthetic application profile", { exact: true })
+          .selectOption("http://127.0.0.1:4273/fixture?variant=B");
+        await page
+          .getByRole("button", {
+            name: "Open managed browser",
+            exact: true,
+          })
+          .click();
+        await page
+          .getByRole("button", {
+            name: "Authentication complete · ready",
+            exact: true,
+          })
+          .click();
+        await expect(
+          page.getByRole("button", {
+            name: "Restore last demonstration",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        await expect(page.locator("#lastDemonstrationStatus")).toContainText(
+          "structurally incompatible",
+        );
+      } finally {
+        await closeStudioServer(incompatibleServer, incompatibleController);
+      }
+
+      const restoredController = new StudioController(rootDirectory);
+      const restoredServer = createStudioServer(restoredController);
+      try {
+        const restoredOrigin = await listenOnEphemeralPort(restoredServer);
+        await page.goto(restoredOrigin);
+        await page
+          .getByRole("button", {
+            name: "Open managed browser",
+            exact: true,
+          })
+          .click();
+        await page
+          .getByRole("button", {
+            name: "Authentication complete · ready",
+            exact: true,
+          })
+          .click();
+        const restore = page.getByRole("button", {
+          name: "Restore last demonstration",
+          exact: true,
+        });
+        await expect(restore).toBeEnabled();
+        await expect(page.locator("#lastDemonstrationStatus")).toContainText(
+          "structure compatible",
+        );
+        await restore.click();
+        await expect(page.locator("#studioState")).toHaveText(
+          "DEMONSTRATION_REVIEW",
+        );
+        expect(restoredController.session?.id).toBe(controller.session?.id);
+        expect(restoredController.localValues).toEqual(controller.localValues);
+        await page
+          .getByRole("button", { name: "Compile", exact: true })
+          .click();
+        await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+        expect(restoredController.workflow).toBeDefined();
+        expect(original.initialSchedule).toEqual({
+          date: "26/07/2026",
+          time: "14:30",
+        });
+      } finally {
+        await closeStudioServer(restoredServer, restoredController);
+      }
+    },
+  );
 });
 
 test("compile failures remain redacted, persistent, copyable and locally logged", async ({

@@ -81,8 +81,8 @@ function consultationSection(mode: string) {
   return `<section class="consultation" aria-labelledby="consultation-heading" data-vc-container="consultation">
     <h2 id="consultation-heading">Consultation</h2>
     ${consultationEditor(mode)}
-    <a href="#" class="save ${unstable("legacy-save")}" role="button"
-      data-vc-action="save-consultation" onclick="return saveConsultation(event)">Enregistrer</a>
+    <a href="#" class="save ${unstable("legacy-save")}"
+      data-vc-action="save-consultation" onclick="return saveConsultation(event)"><span>Enregistrer</span></a>
     <p class="status" role="status" data-vc-outcome="pending">Aucune modification enregistrée.</p>
     <p class="meta">Activations Enregistrer : <strong data-vc-save-count>0</strong></p>
     <h3>Historique des consultations</h3>
@@ -109,6 +109,10 @@ export function renderFixture(url: URL) {
   <header>
     <strong>DPI local synthétique</strong>
     <p>Dossier TEST-VC2 · aucune donnée patient réelle</p>
+    <nav aria-label="Navigation DPI synthétique">
+      <a href="/fixture/home">Accueil</a>
+      <a href="/fixture/records">Dossiers</a>
+    </nav>
   </header>
   <main>
     <article class="record">

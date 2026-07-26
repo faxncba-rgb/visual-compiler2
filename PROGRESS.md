@@ -2,7 +2,8 @@
 
 ## Current milestone
 
-Milestone 11 — Legacy DPI same-page rerender and compile-retry hardening.
+Milestone 12 — actionable save targeting, persistent diagnostics, and
+restart-safe demonstration recovery.
 
 ## Completed
 
@@ -25,13 +26,23 @@ Milestone 11 — Legacy DPI same-page rerender and compile-retry hardening.
   a targeted synthetic-fixture reset that preserves compiled workflows.
 - Browser-backed regressions for rerender/compile/run and 422 correction/retry
   through the real Studio controls and managed-browser recorder.
+- Actionable-ancestor promotion for direct, nested span/image, and deterministic
+  legacy onclick click targets.
+- Safe static interface labels and sequence-aware fill-then-save locator
+  ranking, including scoped duplicate-name handling and fail-closed ambiguity.
+- Expanded locator diagnostics with step/action identity, normalized family,
+  promotion evidence, semantic-container counts and same-form counts.
+- Git-ignored persistence of the last completed synthetic demonstration with
+  session/value separation and profile/structural compatibility checks.
+- Studio restart restore controls and browser-backed compatible/incompatible
+  recovery coverage.
 
 ## Tests
 
 - `npm run build`: passed.
-- `npm test`: 36/36 passed across 8 files.
+- `npm test`: 45/45 passed across 8 files.
 - `npm run test:security`: 5/5 passed.
-- `npm run test:e2e`: 16/16 passed.
+- `npm run test:e2e`: 17/17 passed.
 
 ## Demo readiness
 
@@ -50,4 +61,4 @@ Ready for the bundled synthetic Lab Mode demonstration.
 ## Next actions
 
 1. Publish only `codex/teach-by-demonstration-mvp`.
-2. Conduct the concise manual Legacy DPI layout A retest.
+2. Open the pull request toward `main` without merging it.

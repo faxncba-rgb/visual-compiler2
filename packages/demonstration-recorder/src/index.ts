@@ -18,7 +18,35 @@ import { canonicalizeUrl, createId, sha256 } from "../../shared/src";
 type BrowserTargetPayload = Omit<DemonstratedTarget, "frame" | "descriptor"> & {
   precedingLabels?: string[];
   relatedActionName?: string;
+  normalizedStaticText?: string;
+  hasOnclick?: boolean;
+  rawTargetPromoted?: boolean;
 };
+
+export type ActionableNodeEvidence = {
+  tag: string;
+  role?: string;
+  href?: boolean;
+  hasOnclick?: boolean;
+  inputType?: string;
+};
+
+export function actionableAncestorIndex(path: ActionableNodeEvidence[]) {
+  return path.findIndex((node) => {
+    const tag = node.tag.toLowerCase();
+    const role = node.role?.toLowerCase();
+    const inputType = node.inputType?.toLowerCase();
+    return (
+      tag === "button" ||
+      (tag === "a" && Boolean(node.href || node.hasOnclick)) ||
+      (tag === "input" &&
+        ["button", "submit", "checkbox", "radio"].includes(inputType ?? "")) ||
+      role === "button" ||
+      role === "link" ||
+      Boolean(node.hasOnclick)
+    );
+  });
+}
 
 export type CapturedBrowserEvent = {
   kind:
@@ -57,6 +85,19 @@ const RECORDER_INIT_SCRIPT = `(() => {
   globalThis.__vc2RecorderInstalled = true;
   const pendingInputs = new WeakMap();
   const text = value => String(value || '').replace(/\\s+/g, ' ').trim();
+  const staticInterfaceText = value => {
+    const normalized = text(value).slice(0, 120);
+    if (!normalized) return undefined;
+    if (/(patient|token|secret|cookie|authorization|authentication|bearer|api[-_ ]?key)/i.test(normalized)) return undefined;
+    if (/\\b[0-9]{6,}\\b/.test(normalized) || /[\\w.+-]+@[\\w.-]+\\.[a-z]{2,}/i.test(normalized)) return undefined;
+    return normalized;
+  };
+  const actionableAncestor = raw => {
+    if (!(raw instanceof Element)) return undefined;
+    return raw.closest(
+      'button,a[href],a[onclick],input[type=button],input[type=submit],input[type=checkbox],input[type=radio],[role=button],[role=link],[onclick]'
+    );
+  };
   const role = element => {
     const explicit = element.getAttribute('role');
     if (explicit) return explicit;
@@ -65,6 +106,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
     if (tag === 'select') return 'combobox';
     if (tag === 'button') return 'button';
     if (tag === 'a' && (element.href || element.onclick)) return 'link';
+    if (element.hasAttribute('onclick')) return 'button';
     if (element.isContentEditable) return 'textbox';
     if (tag === 'input') {
       const type = (element.type || 'text').toLowerCase();
@@ -81,8 +123,22 @@ const RECORDER_INIT_SCRIPT = `(() => {
     if (labelledBy) return text(labelledBy.split(/\\s+/).map(id => document.getElementById(id)?.textContent).join(' '));
     return text(element.getAttribute('aria-label'));
   };
-  const accessibleName = element => label(element) || text(element.getAttribute('aria-label')) ||
-    text(element.getAttribute('title')) || (['BUTTON','A'].includes(element.tagName) ? text(element.textContent) : '');
+  const accessibleName = element => label(element) || staticInterfaceText(element.getAttribute('aria-label')) ||
+    staticInterfaceText(element.getAttribute('title')) ||
+    (['BUTTON','A'].includes(element.tagName) || element.matches('[role=button],[role=link],[onclick]')
+      ? staticInterfaceText(element.textContent) ||
+        staticInterfaceText(Array.from(element.querySelectorAll('img[alt]')).map(node => node.getAttribute('alt')).join(' '))
+      : '');
+  const normalizedStaticText = element => {
+    if (element.matches('input:not([type=button]):not([type=submit]):not([type=reset]),textarea,select,[contenteditable=true]')) {
+      return undefined;
+    }
+    if (element instanceof HTMLInputElement) return staticInterfaceText(element.value);
+    if (!element.matches('button,a,label,h1,h2,h3,h4,[role=button],[role=link],[role=heading],[onclick]')) {
+      return undefined;
+    }
+    return staticInterfaceText(element.textContent);
+  };
   const relationText = element => {
     if (!element || element.matches('input,textarea,select,[contenteditable=true]')) return undefined;
     if (!element.matches('label,h1,h2,h3,h4,button,a,[role=heading]')) return undefined;
@@ -110,7 +166,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
     }
     return 'fnv1a-' + (result >>> 0).toString(16).padStart(8, '0');
   };
-  const target = element => {
+  const target = (element, rawElement = element) => {
     if (!(element instanceof Element)) return undefined;
     const inputType = element instanceof HTMLInputElement ? element.type : undefined;
     if (inputType?.toLowerCase() === 'password') return { password: true };
@@ -157,6 +213,9 @@ const RECORDER_INIT_SCRIPT = `(() => {
       role: role(element),
       accessibleName: accessibleName(element) || undefined,
       associatedLabel: label(element) || undefined,
+      normalizedStaticText: normalizedStaticText(element),
+      hasOnclick: element.hasAttribute('onclick'),
+      rawTargetPromoted: rawElement !== element,
       inputType,
       editable: !element.hasAttribute('readonly') && !element.hasAttribute('disabled') &&
         (element.matches('input:not([type=hidden]),textarea,select') || element.isContentEditable),
@@ -196,16 +255,20 @@ const RECORDER_INIT_SCRIPT = `(() => {
     try { void globalThis.__vc2Record(payload); } catch {}
   };
   document.addEventListener('click', event => {
-    const element = event.target?.closest?.('button,a,input,select,textarea,[contenteditable=true],[role=button],[role=textbox]');
+    const raw = event.target;
+    const element = actionableAncestor(raw) ||
+      raw?.closest?.('input,select,textarea,[contenteditable=true],[role=textbox]');
     if (!element) return;
-    const info = target(element);
+    const info = target(element, raw);
     if (info?.password) return;
     const type = element instanceof HTMLInputElement ? element.type : '';
     const kind = type === 'checkbox' ? (element.checked ? 'check' : 'uncheck') : 'click';
     send({ kind, target: info, occurredAt: Date.now() });
   }, true);
   document.addEventListener('dblclick', event => {
-    const info = target(event.target);
+    const raw = event.target;
+    const element = actionableAncestor(raw) || raw;
+    const info = target(element, raw);
     if (!info?.password) send({ kind: 'double-click', target: info, occurredAt: Date.now() });
   }, true);
   document.addEventListener('input', event => {
@@ -233,7 +296,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
     if (!info?.password) send({ kind: 'keyboard', target: info, key: event.key, occurredAt: Date.now() });
   }, true);
   document.addEventListener('submit', event => {
-    const info = target(event.submitter || event.target);
+    const raw = event.submitter || event.target;
+    const info = target(actionableAncestor(raw) || raw, raw);
     if (!info?.password) send({ kind: 'submit', target: info, occurredAt: Date.now() });
   }, true);
   globalThis.addEventListener('focus', () => send({ kind: 'focus', occurredAt: Date.now() }));
@@ -532,6 +596,20 @@ export class DemonstrationRecorder {
     return this.session;
   }
 
+  restore(session: DemonstrationSession, localValues: Record<string, string>) {
+    if (this.#active) throw new Error("Stop teaching before restoring.");
+    const parsed = DemonstrationSessionSchema.parse(session);
+    if (!parsed.stoppedAt)
+      throw new Error("Only a completed demonstration can be restored.");
+    this.#session = {
+      ...parsed,
+      actions: [...parsed.actions],
+      variables: [...parsed.variables],
+    };
+    this.#localValues = new Map(Object.entries(localValues));
+    return this.session;
+  }
+
   async stop() {
     if (!this.#active || !this.#session)
       throw new Error("Teaching is not active.");
@@ -643,6 +721,11 @@ export class DemonstrationRecorder {
             role: payload.target.role,
             accessibleName: payload.target.accessibleName,
             associatedLabel: payload.target.associatedLabel,
+            normalizedStaticText: payload.target.normalizedStaticText,
+            title: payload.target.stableAttributes.title,
+            ariaLabel: payload.target.stableAttributes["aria-label"],
+            hasOnclick: payload.target.hasOnclick ?? false,
+            rawTargetPromoted: payload.target.rawTargetPromoted ?? false,
             formName: payload.target.formName,
             hostFormName: hostEvidence?.formName,
             semanticContainer: payload.target.semanticContainer
@@ -698,12 +781,54 @@ export class DemonstrationRecorder {
         });
       }
     }
+    const previousInputAction = [...this.#session.actions]
+      .reverse()
+      .find(
+        (action) => action.target && ["fill", "select"].includes(action.action),
+      );
+    const previousForm =
+      previousInputAction?.target?.descriptor?.formName ??
+      previousInputAction?.target?.descriptor?.hostFormName;
+    const currentForm =
+      target?.descriptor?.formName ?? target?.descriptor?.hostFormName;
+    const previousContainer =
+      previousInputAction?.target?.descriptor?.semanticContainer?.heading;
+    const currentContainer = target?.descriptor?.semanticContainer?.heading;
+    const sameForm = Boolean(
+      previousForm && currentForm && previousForm === currentForm,
+    );
+    const sameSemanticContainer = Boolean(
+      previousContainer &&
+        currentContainer &&
+        previousContainer === currentContainer,
+    );
+    const staticActionName =
+      target?.descriptor?.normalizedStaticText ??
+      target?.descriptor?.accessibleName ??
+      "";
+    const sequenceContext =
+      previousInputAction &&
+      ["click", "double-click", "submit"].includes(payload.kind)
+        ? {
+            previousActionId: previousInputAction.id,
+            previousAction: previousInputAction.action as "fill" | "select",
+            demonstratedAfterPrevious: true as const,
+            sameForm,
+            sameSemanticContainer,
+            savesPreviousEditor:
+              (sameForm || sameSemanticContainer) &&
+              /(enregistrer|save|submit|valider|confirm)/i.test(
+                staticActionName,
+              ),
+          }
+        : undefined;
     const recorded = RecordedActionSchema.parse({
       id: createId("action"),
       pageContextId,
       action: payload.kind,
       name: `${pageLabel(graphNode?.role ?? "main")} — ${actionLabel(payload.kind, payload.target)}`,
       ...(target ? { target } : {}),
+      ...(sequenceContext ? { sequenceContext } : {}),
       ...(valueRef ? { valueRef } : {}),
       ...(payload.key ? { key: payload.key } : {}),
       observedEffects: [],

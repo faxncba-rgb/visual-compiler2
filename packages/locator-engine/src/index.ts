@@ -12,8 +12,16 @@ import { createId, escapeForAttribute } from "../../shared/src";
 export type LocatorRoot = Page | Frame;
 
 export type LocatorValidationEvidence = {
+  stepId: string;
+  actionIndex: number;
   recordedTargetFamily: string;
+  normalizedActionableAncestorFamily: string;
   actionCompatibility: string[];
+  rawTargetPromoted: boolean;
+  accessibleNamePresent: boolean;
+  normalizedStaticTextPresent: boolean;
+  semanticContainerMatchCount: number;
+  sameFormMatchCount: number;
   candidateCounts: {
     total: number;
     visible: number;
@@ -44,8 +52,8 @@ const strategyWeight: Record<LocatorCandidate["strategy"], number> = {
   "label-association": 0.97,
   "form-control-name": 0.9,
   "container-role-name": 0.92,
-  "text-dom-relation": 0.82,
-  "form-ownership": 0.8,
+  "text-dom-relation": 0.98,
+  "form-ownership": 0.9,
   "neighbor-label": 0.76,
   "same-row-column": 0.68,
   "stable-attribute": 0.72,
@@ -82,7 +90,10 @@ function baseCandidate(
   };
 }
 
-export function generateLocatorCandidates(target: DemonstratedTarget) {
+export function generateLocatorCandidates(
+  target: DemonstratedTarget,
+  sequenceContext?: RecordedAction["sequenceContext"],
+) {
   const candidates: LocatorCandidate[] = [];
   let order = 0;
   if (target.role && target.accessibleName) {
@@ -99,6 +110,24 @@ export function generateLocatorCandidates(target: DemonstratedTarget) {
         0.98,
         0.96,
         "Exact demonstrated accessibility role and accessible name.",
+        order++,
+      ),
+    );
+  }
+  if (target.descriptor?.normalizedStaticText) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "text-dom-relation",
+          tagName: target.descriptor.tag,
+          staticText: target.descriptor.normalizedStaticText,
+          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+        },
+        `${target.descriptor.tag}:text-is(${JSON.stringify(target.descriptor.normalizedStaticText)})`,
+        0.96,
+        0.93,
+        "Exact normalized static text on the demonstrated actionable ancestor.",
         order++,
       ),
     );
@@ -169,12 +198,18 @@ export function generateLocatorCandidates(target: DemonstratedTarget) {
           strategy: "form-ownership",
           formName: target.descriptor.formName,
           controlFamily: target.descriptor.controlFamily,
+          staticText: target.descriptor.normalizedStaticText,
+          ...(sequenceContext?.previousActionId
+            ? { sequencePreviousActionId: sequenceContext.previousActionId }
+            : {}),
           ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
         },
         `form[name=${JSON.stringify(target.descriptor.formName)}] ${target.descriptor.controlFamily}`,
-        0.88,
-        0.9,
-        "Stable form ownership plus demonstrated control family.",
+        sequenceContext?.sameForm ? 0.97 : 0.88,
+        sequenceContext?.sameForm ? 0.96 : 0.9,
+        sequenceContext?.sameForm
+          ? "Same demonstrated form as the preceding input action, exact static text, and compatible control family."
+          : "Stable form ownership plus demonstrated control family.",
         order++,
       ),
     );
@@ -233,6 +268,13 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
     if (!rule.label) throw new Error("Label locator is incomplete.");
     return root.getByLabel(rule.label, { exact: true });
   }
+  if (rule.strategy === "text-dom-relation") {
+    if (!rule.tagName || !rule.staticText)
+      throw new Error("Exact-text locator is incomplete.");
+    return root
+      .locator(rule.tagName)
+      .filter({ hasText: exactStaticTextPattern(rule.staticText) });
+  }
   if (rule.strategy === "form-control-name") {
     if (!rule.formControlName)
       throw new Error("Form-control locator is incomplete.");
@@ -268,9 +310,12 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       link: "a,[role=link]",
       other: "*",
     };
-    return root
+    const locator = root
       .locator(`form[name="${escapeForAttribute(rule.formName)}"]`)
       .locator(selectors[rule.controlFamily]);
+    return rule.staticText
+      ? locator.filter({ hasText: exactStaticTextPattern(rule.staticText) })
+      : locator;
   }
   if (rule.strategy === "stable-attribute") {
     if (!rule.attribute || !rule.attributeValue)
@@ -293,6 +338,15 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       .locator(rule.structuralPath);
   }
   throw new Error(`Locator strategy ${rule.strategy} is not executable.`);
+}
+
+function exactStaticTextPattern(value: string) {
+  const normalized = value.trim().split(/\s+/).map(escapeRegExp).join("\\s+");
+  return new RegExp(`^\\s*${normalized}\\s*$`);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function editableCount(locator: Locator) {
@@ -466,6 +520,8 @@ export function selectDemonstratedLocator(
     action?: RecordedAction["action"];
     originalDomNodeReplaced?: boolean;
     semanticEquivalentFound?: boolean;
+    stepId?: string;
+    actionIndex?: number;
   } = {},
 ) {
   const actionCompatible =
@@ -516,13 +572,36 @@ export function selectDemonstratedLocator(
           return typeof value === "number" ? value : 0;
         }),
       );
+    const maximumForStrategies = (strategies: LocatorCandidate["strategy"][]) =>
+      Math.max(
+        0,
+        ...candidates
+          .filter((candidate) => strategies.includes(candidate.strategy))
+          .map((candidate) => candidate.matchCount),
+      );
     throw new LocatorValidationError({
+      stepId: options.stepId ?? "unassigned-step",
+      actionIndex: options.actionIndex ?? -1,
       recordedTargetFamily:
+        options.target?.descriptor?.controlFamily ??
+        (options.target ? inferredControlFamily(options.target) : "unknown"),
+      normalizedActionableAncestorFamily:
         options.target?.descriptor?.controlFamily ??
         (options.target ? inferredControlFamily(options.target) : "unknown"),
       actionCompatibility:
         options.target?.descriptor?.actionCompatibility ??
         (options.action ? [options.action] : []),
+      rawTargetPromoted: options.target?.descriptor?.rawTargetPromoted ?? false,
+      accessibleNamePresent: Boolean(
+        options.target?.descriptor?.accessibleName,
+      ),
+      normalizedStaticTextPresent: Boolean(
+        options.target?.descriptor?.normalizedStaticText,
+      ),
+      semanticContainerMatchCount: maximumForStrategies([
+        "container-role-name",
+      ]),
+      sameFormMatchCount: maximumForStrategies(["form-ownership"]),
       candidateCounts: {
         total: maximum("matchCount"),
         visible: maximum("visibleCount"),

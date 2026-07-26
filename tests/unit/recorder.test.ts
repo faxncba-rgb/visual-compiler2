@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Frame } from "playwright";
 import {
+  actionableAncestorIndex,
   deduplicateAction,
   shouldExcludeFrame,
   variableNameForTarget,
@@ -23,6 +24,31 @@ function action(overrides: Partial<RecordedAction> = {}): RecordedAction {
 }
 
 describe("high-level recorder", () => {
+  it.each([
+    {
+      name: "direct anchor",
+      path: [{ tag: "a", href: true }],
+      expected: 0,
+    },
+    {
+      name: "nested span",
+      path: [{ tag: "span" }, { tag: "a", href: true }],
+      expected: 1,
+    },
+    {
+      name: "nested image with accessible parent",
+      path: [{ tag: "img" }, { tag: "a", role: "link", href: true }],
+      expected: 1,
+    },
+    {
+      name: "legacy onclick anchor",
+      path: [{ tag: "a", hasOnclick: true }],
+      expected: 0,
+    },
+  ])("normalizes $name to its actionable ancestor", ({ path, expected }) => {
+    expect(actionableAncestorIndex(path)).toBe(expected);
+  });
+
   it("deduplicates one human action instead of pointer-level noise", () => {
     const actions = [action()];
     const result = deduplicateAction(

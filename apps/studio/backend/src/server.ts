@@ -3,6 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
 import { appendFile, readFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +34,7 @@ import {
   redactObject,
 } from "../../../../packages/shared/src";
 import {
+  assertNoLocalValuesInSession,
   LocalVariableValuesSchema,
   type LocalVariableValues,
 } from "../../../../packages/workflow-variables/src";
@@ -44,6 +46,25 @@ import {
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendDirectory = path.resolve(moduleDirectory, "../../frontend");
+const LAST_DEMONSTRATION_VERSION = 1;
+
+type LastDemonstrationMetadata = {
+  version: typeof LAST_DEMONSTRATION_VERSION;
+  profileId: string;
+  origin: string;
+  pathname: string;
+  structuralFingerprint: string;
+  authenticationPersisted: false;
+  queryParametersPersisted: false;
+  valuesStoredSeparately: true;
+};
+
+function syntheticProfileId(value: string) {
+  const url = new URL(value);
+  if (url.pathname === "/fixture/popup-workflow")
+    return "synthetic-popup-workflow";
+  return "synthetic-legacy-dpi";
+}
 
 export type StudioCompilationStage =
   | CompilationStage
@@ -169,6 +190,61 @@ export class StudioController {
     });
   }
 
+  #lastDemonstrationDirectory() {
+    return path.join(this.rootDirectory, "local-data", "last-demonstration");
+  }
+
+  #readLastDemonstrationMetadata() {
+    const filename = path.join(
+      this.#lastDemonstrationDirectory(),
+      "metadata.json",
+    );
+    if (!existsSync(filename)) return undefined;
+    try {
+      const value = JSON.parse(
+        readFileSync(filename, "utf8"),
+      ) as LastDemonstrationMetadata;
+      if (
+        value.version !== LAST_DEMONSTRATION_VERSION ||
+        value.authenticationPersisted !== false ||
+        value.queryParametersPersisted !== false ||
+        value.valuesStoredSeparately !== true
+      )
+        return undefined;
+      return value;
+    } catch {
+      return undefined;
+    }
+  }
+
+  #lastDemonstrationStatus() {
+    const metadata = this.#readLastDemonstrationMetadata();
+    const directory = this.#lastDemonstrationDirectory();
+    const available = Boolean(
+      metadata &&
+        existsSync(path.join(directory, "session.json")) &&
+        existsSync(path.join(directory, "variables.json")),
+    );
+    let structurallyCompatible = false;
+    if (available && this.browser.status().open) {
+      const graph = this.browser.graph.data();
+      const root = graph.nodes.find((node) => node.id === graph.rootId);
+      structurallyCompatible = Boolean(
+        root &&
+          metadata &&
+          metadata.profileId === syntheticProfileId(this.targetUrl) &&
+          metadata.origin === root.origin &&
+          metadata.pathname === root.pathname &&
+          metadata.structuralFingerprint === root.structuralFingerprint,
+      );
+    }
+    return {
+      available,
+      ...(metadata ? { profileId: metadata.profileId } : {}),
+      structurallyCompatible,
+    };
+  }
+
   snapshot() {
     return {
       product: "Visual Compiler 2",
@@ -193,6 +269,7 @@ export class StudioController {
       telemetry: this.telemetry,
       compilationDiagnostic: this.compilationDiagnostic,
       studioEventLog: this.studioEventLog,
+      lastDemonstration: this.#lastDemonstrationStatus(),
       metrics: {
         compileTimeModelCalls:
           this.workflow?.compilationMetadata.modelCalls ?? 0,
@@ -259,7 +336,97 @@ export class StudioController {
       this.recorder!.localValues,
     );
     this.machine.transition("DEMONSTRATION_REVIEW");
+    await this.persistLastDemonstration();
     await this.persistRecoverableState();
+  }
+
+  async persistLastDemonstration() {
+    if (!this.session?.stoppedAt)
+      throw new Error("Only a completed demonstration can be persisted.");
+    const session = DemonstrationSessionSchema.parse(this.session);
+    const values = LocalVariableValuesSchema.parse(this.localValues);
+    assertNoLocalValuesInSession(session, values);
+    const root = session.pageGraph.nodes.find(
+      (node) => node.id === session.pageGraph.rootId,
+    );
+    if (!root)
+      throw new Error(
+        "The completed demonstration has no compatible root structure.",
+      );
+    const metadata: LastDemonstrationMetadata = {
+      version: LAST_DEMONSTRATION_VERSION,
+      profileId: syntheticProfileId(this.targetUrl),
+      origin: root.origin,
+      pathname: root.pathname,
+      structuralFingerprint: root.structuralFingerprint,
+      authenticationPersisted: false,
+      queryParametersPersisted: false,
+      valuesStoredSeparately: true,
+    };
+    const directory = this.#lastDemonstrationDirectory();
+    await mkdir(directory, { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(directory, "session.json"),
+        `${JSON.stringify(session, null, 2)}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        path.join(directory, "variables.json"),
+        `${JSON.stringify(values, null, 2)}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        path.join(directory, "metadata.json"),
+        `${JSON.stringify(metadata, null, 2)}\n`,
+        { mode: 0o600 },
+      ),
+    ]);
+  }
+
+  async restoreLastDemonstration() {
+    if (this.machine.state !== "READY_TO_TEACH")
+      throw new Error(
+        "Open and authenticate the matching synthetic profile before restoring.",
+      );
+    const metadata = this.#readLastDemonstrationMetadata();
+    if (!metadata)
+      throw new Error("No completed synthetic demonstration is available.");
+    const directory = this.#lastDemonstrationDirectory();
+    const [sessionText, valuesText] = await Promise.all([
+      readFile(path.join(directory, "session.json"), "utf8"),
+      readFile(path.join(directory, "variables.json"), "utf8"),
+    ]);
+    const session = DemonstrationSessionSchema.parse(JSON.parse(sessionText));
+    const values = LocalVariableValuesSchema.parse(JSON.parse(valuesText));
+    assertNoLocalValuesInSession(session, values);
+    const graph = this.browser.graph.data();
+    const liveRoot = graph.nodes.find((node) => node.id === graph.rootId);
+    if (
+      !liveRoot ||
+      metadata.profileId !== syntheticProfileId(this.targetUrl) ||
+      metadata.origin !== liveRoot.origin ||
+      metadata.pathname !== liveRoot.pathname ||
+      metadata.structuralFingerprint !== liveRoot.structuralFingerprint
+    )
+      throw new Error(
+        "The last demonstration is structurally incompatible with the current synthetic profile.",
+      );
+    this.session = this.recorder!.restore(
+      session,
+      Object.fromEntries(
+        Object.entries(values).map(([name, value]) => [name, String(value)]),
+      ),
+    );
+    this.localValues = values;
+    this.workflow = undefined;
+    this.telemetry = undefined;
+    this.aiPayload = undefined;
+    this.compilationDiagnostic = undefined;
+    this.generalizationInstruction = "";
+    this.machine.transition("DEMONSTRATION_REVIEW");
+    await this.persistRecoverableState();
+    return this.session;
   }
 
   updateAction(
@@ -463,6 +630,7 @@ export class StudioController {
       this.session = await this.recorder!.stop();
       this.localValues = this.recorder!.localValues;
       this.machine.transition("STOPPED");
+      await this.persistLastDemonstration();
       return;
     }
     throw new Error("Nothing is currently recording or running.");
@@ -571,6 +739,13 @@ export function createStudioServer(controller = new StudioController()) {
       }
       if (request.method === "POST" && url.pathname === "/api/teaching/stop") {
         await controller.stopTeaching();
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/teaching/restore-last"
+      ) {
+        await controller.restoreLastDemonstration();
         return sendJson(response, 200, controller.snapshot());
       }
       if (

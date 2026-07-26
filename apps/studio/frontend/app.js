@@ -292,6 +292,11 @@ function renderButtons() {
   $("#authComplete").disabled = current !== "AUTHENTICATING";
   $("#startTeaching").disabled = current !== "READY_TO_TEACH";
   $("#stopTeaching").disabled = current !== "RECORDING";
+  $("#restoreLastDemonstration").disabled =
+    current !== "READY_TO_TEACH" ||
+    !state?.lastDemonstration?.available ||
+    !state?.lastDemonstration?.structurallyCompatible ||
+    requestInFlight;
   $("#rerecord").disabled = ![
     "DEMONSTRATION_REVIEW",
     "READY_TO_RUN",
@@ -342,6 +347,14 @@ function render() {
     : "Recorder idle";
   $("#recordingIndicator").className =
     "recording-indicator" + (recording ? " active" : "");
+  const lastDemonstration = state.lastDemonstration;
+  $("#lastDemonstrationStatus").textContent = !lastDemonstration?.available
+    ? "No completed local demonstration is available."
+    : lastDemonstration.structurallyCompatible
+      ? `Ready to restore · ${lastDemonstration.profileId} · structure compatible.`
+      : state.browser.open
+        ? `Stored profile ${lastDemonstration.profileId} is structurally incompatible with the current page.`
+        : `Stored locally for ${lastDemonstration.profileId}. Open and authenticate that profile to restore it.`;
   $("#runtimeState").textContent = state.telemetry
     ? `${state.telemetry.state} · ${state.telemetry.mode} · ${state.telemetry.steps.length} steps`
     : state.workflow
@@ -443,6 +456,15 @@ $("#stopTeaching").addEventListener(
       "/api/teaching/stop",
       {},
       "Teaching stopped. Review the exact recorded timeline.",
+    ),
+);
+$("#restoreLastDemonstration").addEventListener(
+  "click",
+  () =>
+    void mutate(
+      "/api/teaching/restore-last",
+      {},
+      "Last completed synthetic demonstration restored for compilation.",
     ),
 );
 

@@ -10,6 +10,7 @@ import {
 } from "../../demonstration-ir/src";
 import type { PageContextGraph } from "../../page-context-graph/src";
 import {
+  generateLocatorCandidates,
   selectDemonstratedLocator,
   validateCapturedLocatorCandidates,
   validateLocatorCandidates,
@@ -293,11 +294,21 @@ async function compileSteps(
   values: LocalVariableValues,
 ) {
   const steps: CompiledStep[] = [];
-  for (const action of session.actions) {
+  for (
+    let actionIndex = 0;
+    actionIndex < session.actions.length;
+    actionIndex += 1
+  ) {
+    const action = session.actions[actionIndex]!;
+    const stepId = createId("step");
     const hasExecutableTarget = Boolean(action.target);
     let candidates: Awaited<ReturnType<typeof validateLocatorCandidates>> = [];
     let selectedLocatorId: string | undefined;
     if (action.target) {
+      const generatedCandidates = generateLocatorCandidates(
+        action.target,
+        action.sequenceContext,
+      );
       const liveResolution = await graph.resolveLiveTargetRoot(
         action.pageContextId,
         action.target.descriptor?.frame ?? {
@@ -312,9 +323,13 @@ async function compileSteps(
       const useCapturedClosedPage =
         !liveResolution.root && recordedPage?.isClosed();
       candidates = useCapturedClosedPage
-        ? validateCapturedLocatorCandidates(action.target)
+        ? validateCapturedLocatorCandidates(action.target, generatedCandidates)
         : liveResolution.root
-          ? await validateLocatorCandidates(liveResolution.root, action.target)
+          ? await validateLocatorCandidates(
+              liveResolution.root,
+              action.target,
+              generatedCandidates,
+            )
           : [];
       const selected = selectDemonstratedLocator(candidates, {
         requireEditable: ["fill", "select"].includes(action.action),
@@ -322,6 +337,8 @@ async function compileSteps(
         action: action.action,
         originalDomNodeReplaced: liveResolution.originalDomNodeReplaced,
         semanticEquivalentFound: liveResolution.semanticEquivalentFound,
+        stepId,
+        actionIndex,
       });
       selectedLocatorId = selected.id;
     }
@@ -369,12 +386,15 @@ async function compileSteps(
           ]
         : [];
     steps.push({
-      id: createId("step"),
+      id: stepId,
       sourceActionId: action.id,
       pageContextId: action.pageContextId,
       action: action.action,
       name: action.name,
       ...(action.target ? { target: action.target } : {}),
+      ...(action.sequenceContext
+        ? { sequenceContext: action.sequenceContext }
+        : {}),
       locatorCandidates: candidates,
       ...(selectedLocatorId ? { selectedLocatorId } : {}),
       ...(action.valueRef && !localLiteral
@@ -467,6 +487,8 @@ function generatedLocator(
     return `${root}.getByRole(${JSON.stringify(rule.role)}, { name: ${JSON.stringify(rule.name)}, exact: true })`;
   if (rule.strategy === "label-association")
     return `${root}.getByLabel(${JSON.stringify(rule.label)}, { exact: true })`;
+  if (rule.strategy === "text-dom-relation")
+    return `${root}.locator(${JSON.stringify(rule.tagName)}).filter({ hasText: ${generatedExactTextPattern(rule.staticText ?? "")} })`;
   if (rule.strategy === "form-control-name")
     return `${root}.locator(${JSON.stringify(`[name="${rule.formControlName}"]`)})`;
   if (rule.strategy === "stable-attribute")
@@ -491,9 +513,21 @@ function generatedLocator(
     const family =
       rule.controlFamily &&
       selectors[rule.controlFamily as keyof typeof selectors];
-    return `${root}.locator(${JSON.stringify(`form[name="${rule.formName}"]`)}).locator(${JSON.stringify(family ?? "*")})`;
+    const locator = `${root}.locator(${JSON.stringify(`form[name="${rule.formName}"]`)}).locator(${JSON.stringify(family ?? "*")})`;
+    return rule.staticText
+      ? `${locator}.filter({ hasText: ${generatedExactTextPattern(rule.staticText)} })`
+      : locator;
   }
   return `${root}.locator(${JSON.stringify(rule.structuralPath ?? candidate.selectorPreview)})`;
+}
+
+function generatedExactTextPattern(value: string) {
+  const pattern = `^\\s*${value
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+")}\\s*$`;
+  return `new RegExp(${JSON.stringify(pattern)})`;
 }
 
 function generatePlaywright(workflowId: string, steps: CompiledStep[]) {

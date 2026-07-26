@@ -79,7 +79,7 @@ export async function teachPrimaryWorkflow(details: {
   await editor.press("ControlOrMeta+A");
   await editor.pressSequentially(value);
   await page.waitForTimeout(380);
-  await page.getByRole("button", { name: "Enregistrer", exact: true }).click();
+  await page.getByText("Enregistrer", { exact: true }).click();
   await page
     .getByText("Consultation synthétique enregistrée.", { exact: true })
     .waitFor();

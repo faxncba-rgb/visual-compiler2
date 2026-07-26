@@ -47,6 +47,11 @@ export const DemonstratedTargetDescriptorSchema = z.object({
   role: z.string().optional(),
   accessibleName: z.string().optional(),
   associatedLabel: z.string().optional(),
+  normalizedStaticText: z.string().optional(),
+  title: z.string().optional(),
+  ariaLabel: z.string().optional(),
+  hasOnclick: z.boolean().default(false),
+  rawTargetPromoted: z.boolean().default(false),
   formName: z.string().optional(),
   hostFormName: z.string().optional(),
   semanticContainer: z
@@ -196,12 +201,22 @@ export const RecordedActionTypeSchema = z.enum([
   "assert",
 ]);
 
+export const DemonstratedSequenceContextSchema = z.object({
+  previousActionId: z.string(),
+  previousAction: z.enum(["fill", "select"]),
+  demonstratedAfterPrevious: z.literal(true),
+  sameForm: z.boolean(),
+  sameSemanticContainer: z.boolean(),
+  savesPreviousEditor: z.boolean(),
+});
+
 export const RecordedActionSchema = z.object({
   id: z.string(),
   pageContextId: z.string(),
   action: RecordedActionTypeSchema,
   name: z.string(),
   target: DemonstratedTargetSchema.optional(),
+  sequenceContext: DemonstratedSequenceContextSchema.optional(),
   valueRef: z.string().optional(),
   key: z.string().optional(),
   dialog: z
@@ -273,6 +288,9 @@ export const LocatorRuleSchema = z.object({
   structuralPath: z.string().optional(),
   frameTitle: z.string().optional(),
   formName: z.string().optional(),
+  tagName: z.string().optional(),
+  staticText: z.string().optional(),
+  sequencePreviousActionId: z.string().optional(),
   controlFamily:
     DemonstratedTargetDescriptorSchema.shape.controlFamily.optional(),
 });
@@ -332,6 +350,7 @@ export const CompiledStepSchema = z.object({
   action: RecordedActionTypeSchema,
   name: z.string(),
   target: DemonstratedTargetSchema.optional(),
+  sequenceContext: DemonstratedSequenceContextSchema.optional(),
   locatorCandidates: z.array(LocatorCandidateSchema),
   selectedLocatorId: z.string().optional(),
   valueRef: z.string().optional(),
