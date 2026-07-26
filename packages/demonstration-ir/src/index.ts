@@ -16,6 +16,58 @@ export const FrameIdentitySchema = z.object({
   structuralFingerprint: z.string(),
 });
 
+export const DemonstratedTargetDescriptorSchema = z.object({
+  controlFamily: z.enum([
+    "multiline-text",
+    "single-line-text",
+    "selection",
+    "toggle",
+    "button",
+    "link",
+    "other",
+  ]),
+  multiline: z.boolean(),
+  editable: z.boolean(),
+  actionCompatibility: z
+    .array(
+      z.enum([
+        "click",
+        "double-click",
+        "fill",
+        "select",
+        "check",
+        "uncheck",
+        "keyboard",
+        "submit",
+        "focus",
+      ]),
+    )
+    .min(1),
+  tag: z.string().min(1),
+  role: z.string().optional(),
+  accessibleName: z.string().optional(),
+  associatedLabel: z.string().optional(),
+  formName: z.string().optional(),
+  hostFormName: z.string().optional(),
+  semanticContainer: z
+    .object({
+      tag: z.string(),
+      heading: z.string().optional(),
+      landmark: z.string().optional(),
+    })
+    .optional(),
+  neighboringLabels: z.array(z.string()).max(8).default([]),
+  precedingLabels: z.array(z.string()).max(8).default([]),
+  relatedActionName: z.string().optional(),
+  frame: z.object({
+    role: z.enum(["main", "same-origin", "cross-origin-opaque"]),
+    name: z.string().optional(),
+    title: z.string().optional(),
+    origin: z.string(),
+    pathname: z.string(),
+  }),
+});
+
 export const DemonstratedTargetSchema = z.object({
   fingerprint: z.string().min(8),
   tag: z.string().min(1),
@@ -56,6 +108,7 @@ export const DemonstratedTargetSchema = z.object({
     )
     .default([]),
   frame: FrameIdentitySchema,
+  descriptor: DemonstratedTargetDescriptorSchema.optional(),
   stableAttributes: z.record(z.string()).default({}),
   unstableAttributes: z.array(z.string()).default([]),
   structuralPath: z.string(),
@@ -219,6 +272,9 @@ export const LocatorRuleSchema = z.object({
   attributeValue: z.string().optional(),
   structuralPath: z.string().optional(),
   frameTitle: z.string().optional(),
+  formName: z.string().optional(),
+  controlFamily:
+    DemonstratedTargetDescriptorSchema.shape.controlFamily.optional(),
 });
 
 export const LocatorCandidateSchema = z.object({
@@ -230,6 +286,7 @@ export const LocatorCandidateSchema = z.object({
   visibleCount: z.number().int().nonnegative(),
   enabledCount: z.number().int().nonnegative(),
   editableCount: z.number().int().nonnegative().optional(),
+  typeCompatibleCount: z.number().int().nonnegative().default(0),
   unique: z.boolean(),
   confidence: z.number().min(0).max(1),
   stability: z.number().min(0).max(1),
@@ -431,6 +488,9 @@ export const RuntimeTelemetrySchema = z.object({
 });
 
 export type DemonstratedTarget = z.infer<typeof DemonstratedTargetSchema>;
+export type DemonstratedTargetDescriptor = z.infer<
+  typeof DemonstratedTargetDescriptorSchema
+>;
 export type RecordedPageContext = z.infer<typeof RecordedPageContextSchema>;
 export type PageContextGraphData = z.infer<typeof PageContextGraphSchema>;
 export type ObservedEffect = z.infer<typeof ObservedEffectSchema>;

@@ -20,7 +20,9 @@ test("Studio exposes permanent Lab Mode, privacy boundaries, and both optional r
   await expect(
     page.getByRole("button", { name: "Stop", exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reset" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Reset", exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Run locally" }),
   ).toBeDisabled();
@@ -52,6 +54,6 @@ test("Studio binds to the synthetic fixture and keeps recording disabled during 
   await expect(
     page.getByRole("button", { name: "Start teaching" }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
   await expect(page.locator("#studioState")).toHaveText("IDLE");
 });

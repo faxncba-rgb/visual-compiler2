@@ -2,12 +2,42 @@ import type { Frame, Locator, Page } from "playwright";
 import {
   LocatorCandidateSchema,
   type DemonstratedTarget,
+  type DemonstratedTargetDescriptor,
   type LocatorCandidate,
   type LocatorRule,
+  type RecordedAction,
 } from "../../demonstration-ir/src";
 import { createId, escapeForAttribute } from "../../shared/src";
 
 export type LocatorRoot = Page | Frame;
+
+export type LocatorValidationEvidence = {
+  recordedTargetFamily: string;
+  actionCompatibility: string[];
+  candidateCounts: {
+    total: number;
+    visible: number;
+    enabled: number;
+    editable: number;
+    typeCompatible: number;
+  };
+  rejectionReasonsByStrategy: Array<{
+    strategy: LocatorCandidate["strategy"];
+    reasons: string[];
+  }>;
+  originalDomNodeReplaced: boolean;
+  semanticEquivalentFound: boolean;
+};
+
+export class LocatorValidationError extends Error {
+  readonly name = "LocatorValidationError";
+
+  constructor(readonly evidence: LocatorValidationEvidence) {
+    super(
+      "Compilation rejected: no unique, visible, enabled, type-compatible locator preserves the demonstrated target.",
+    );
+  }
+}
 
 const strategyWeight: Record<LocatorCandidate["strategy"], number> = {
   "role-name": 1,
@@ -42,6 +72,7 @@ function baseCandidate(
     visibleCount: 0,
     enabledCount: 0,
     editableCount: 0,
+    typeCompatibleCount: 0,
     unique: false,
     confidence,
     stability,
@@ -130,6 +161,24 @@ export function generateLocatorCandidates(target: DemonstratedTarget) {
       ),
     );
   }
+  if (target.descriptor?.formName) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "form-ownership",
+          formName: target.descriptor.formName,
+          controlFamily: target.descriptor.controlFamily,
+          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+        },
+        `form[name=${JSON.stringify(target.descriptor.formName)}] ${target.descriptor.controlFamily}`,
+        0.88,
+        0.9,
+        "Stable form ownership plus demonstrated control family.",
+        order++,
+      ),
+    );
+  }
   for (const attribute of ["data-vc-field", "data-vc-action", "data-testid"]) {
     const attributeValue = target.stableAttributes[attribute];
     if (!attributeValue) continue;
@@ -201,6 +250,28 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       .filter({ has: heading })
       .getByRole(rule.role as never, { name: rule.name, exact: true });
   }
+  if (rule.strategy === "form-ownership") {
+    if (!rule.formName || !rule.controlFamily)
+      throw new Error("Form-ownership locator is incomplete.");
+    const selectors: Record<
+      DemonstratedTargetDescriptor["controlFamily"],
+      string
+    > = {
+      "multiline-text":
+        'textarea,[contenteditable="true"][role="textbox"],[contenteditable="true"]',
+      "single-line-text":
+        'input:not([type="hidden"]):not([type="password"]),[role="textbox"]:not(textarea)',
+      selection: "select,[role=combobox],[role=listbox]",
+      toggle:
+        'input[type="checkbox"],input[type="radio"],[role=checkbox],[role=radio],[role=switch]',
+      button: "button,[role=button],input[type=submit],input[type=button]",
+      link: "a,[role=link]",
+      other: "*",
+    };
+    return root
+      .locator(`form[name="${escapeForAttribute(rule.formName)}"]`)
+      .locator(selectors[rule.controlFamily]);
+  }
   if (rule.strategy === "stable-attribute") {
     if (!rule.attribute || !rule.attributeValue)
       throw new Error("Stable-attribute locator is incomplete.");
@@ -225,7 +296,7 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
 }
 
 async function editableCount(locator: Locator) {
-  const count = await locator.count();
+  const count = await locator.count().catch(() => 0);
   let editable = 0;
   for (let index = 0; index < count; index += 1) {
     if (
@@ -239,11 +310,83 @@ async function editableCount(locator: Locator) {
   return editable;
 }
 
+function inferredControlFamily(
+  target: DemonstratedTarget,
+): DemonstratedTargetDescriptor["controlFamily"] {
+  const tag = target.tag.toLowerCase();
+  const role = target.role?.toLowerCase();
+  if (
+    tag === "textarea" ||
+    ["contenteditable", "legacy-facade"].includes(target.editorAdapter ?? "")
+  )
+    return "multiline-text";
+  if (tag === "select" || ["combobox", "listbox"].includes(role ?? ""))
+    return "selection";
+  if (
+    ["checkbox", "radio"].includes(target.inputType?.toLowerCase() ?? "") ||
+    ["checkbox", "radio", "switch"].includes(role ?? "")
+  )
+    return "toggle";
+  if (tag === "button" || role === "button") return "button";
+  if (tag === "a" || role === "link") return "link";
+  if (tag === "input" || role === "textbox") return "single-line-text";
+  return "other";
+}
+
+async function typeCompatibleCount(
+  locator: Locator,
+  family: DemonstratedTargetDescriptor["controlFamily"],
+) {
+  const count = await locator.count().catch(() => 0);
+  let compatible = 0;
+  for (let index = 0; index < count; index += 1) {
+    const matches = await locator
+      .nth(index)
+      .evaluate((element, expectedFamily) => {
+        const tag = element.tagName.toLowerCase();
+        const role = element.getAttribute("role")?.toLowerCase();
+        const inputType =
+          element instanceof HTMLInputElement
+            ? element.type.toLowerCase()
+            : undefined;
+        const contenteditable = element.getAttribute("contenteditable");
+        if (expectedFamily === "multiline-text")
+          return (
+            tag === "textarea" ||
+            (contenteditable === "true" && (!role || role === "textbox"))
+          );
+        if (expectedFamily === "single-line-text")
+          return (
+            tag === "input" &&
+            !["hidden", "password", "checkbox", "radio"].includes(
+              inputType ?? "",
+            )
+          );
+        if (expectedFamily === "selection")
+          return tag === "select" || role === "combobox" || role === "listbox";
+        if (expectedFamily === "toggle")
+          return (
+            ["checkbox", "radio"].includes(inputType ?? "") ||
+            ["checkbox", "radio", "switch"].includes(role ?? "")
+          );
+        if (expectedFamily === "button")
+          return tag === "button" || role === "button";
+        if (expectedFamily === "link") return tag === "a" || role === "link";
+        return true;
+      }, family)
+      .catch(() => false);
+    if (matches) compatible += 1;
+  }
+  return compatible;
+}
+
 export async function validateLocatorCandidates(
   root: LocatorRoot,
   target: DemonstratedTarget,
   candidates = generateLocatorCandidates(target),
 ) {
+  const controlFamily =
+    target.descriptor?.controlFamily ?? inferredControlFamily(target);
   const validated: LocatorCandidate[] = [];
   for (const candidate of candidates) {
     const locator = locatorForRule(root, candidate.rule);
@@ -262,6 +405,7 @@ export async function validateLocatorCandidates(
         visibleCount,
         enabledCount,
         editableCount: await editableCount(locator),
+        typeCompatibleCount: await typeCompatibleCount(locator, controlFamily),
         unique: matchCount === 1,
       }),
     );
@@ -292,6 +436,7 @@ export function validateCapturedLocatorCandidates(
         visibleCount: matchCount === 1 && target.visible ? 1 : 0,
         enabledCount: matchCount === 1 && target.enabled ? 1 : 0,
         editableCount: matchCount === 1 && target.editable ? 1 : 0,
+        typeCompatibleCount: matchCount === 1 ? 1 : 0,
         unique: matchCount === 1,
         explanation: `${candidate.explanation} Revalidated from capture-time evidence because the transient context had closed.`,
       });
@@ -314,21 +459,81 @@ export function rankLocatorCandidates(candidates: LocatorCandidate[]) {
 
 export function selectDemonstratedLocator(
   candidates: LocatorCandidate[],
-  options: { requireEditable?: boolean; confidenceThreshold?: number } = {},
+  options: {
+    requireEditable?: boolean;
+    confidenceThreshold?: number;
+    target?: DemonstratedTarget;
+    action?: RecordedAction["action"];
+    originalDomNodeReplaced?: boolean;
+    semanticEquivalentFound?: boolean;
+  } = {},
 ) {
+  const actionCompatible =
+    !options.target?.descriptor ||
+    !options.action ||
+    options.target.descriptor.actionCompatibility.includes(
+      options.action as never,
+    );
   const best = rankLocatorCandidates(candidates).find(
     (candidate) =>
+      actionCompatible &&
       candidate.unique &&
       candidate.visibleCount === 1 &&
       candidate.enabledCount === 1 &&
       (!options.requireEditable || candidate.editableCount === 1) &&
+      candidate.typeCompatibleCount === 1 &&
       candidate.strategy !== "absolute-coordinate" &&
       candidate.confidence >= (options.confidenceThreshold ?? 0.7),
   );
   if (!best) {
-    throw new Error(
-      "Compilation rejected: no unique, visible, enabled, type-compatible locator preserves the demonstrated target.",
-    );
+    const rejectionReasonsByStrategy = candidates.map((candidate) => {
+      const reasons: string[] = [];
+      if (!candidate.unique)
+        reasons.push(
+          candidate.matchCount === 0
+            ? "no semantic match"
+            : "multiple semantic matches",
+        );
+      if (candidate.visibleCount !== 1)
+        reasons.push("visible candidate count is not one");
+      if (candidate.enabledCount !== 1)
+        reasons.push("enabled candidate count is not one");
+      if (options.requireEditable && candidate.editableCount !== 1)
+        reasons.push("editable candidate count is not one");
+      if (candidate.typeCompatibleCount !== 1)
+        reasons.push("type-compatible candidate count is not one");
+      if (!actionCompatible)
+        reasons.push("recorded target is not compatible with this action");
+      if (candidate.confidence < (options.confidenceThreshold ?? 0.7))
+        reasons.push("confidence is below threshold");
+      return { strategy: candidate.strategy, reasons };
+    });
+    const maximum = (field: keyof LocatorCandidate) =>
+      Math.max(
+        0,
+        ...candidates.map((candidate) => {
+          const value = candidate[field];
+          return typeof value === "number" ? value : 0;
+        }),
+      );
+    throw new LocatorValidationError({
+      recordedTargetFamily:
+        options.target?.descriptor?.controlFamily ??
+        (options.target ? inferredControlFamily(options.target) : "unknown"),
+      actionCompatibility:
+        options.target?.descriptor?.actionCompatibility ??
+        (options.action ? [options.action] : []),
+      candidateCounts: {
+        total: maximum("matchCount"),
+        visible: maximum("visibleCount"),
+        enabled: maximum("enabledCount"),
+        editable: maximum("editableCount"),
+        typeCompatible: maximum("typeCompatibleCount"),
+      },
+      rejectionReasonsByStrategy,
+      originalDomNodeReplaced: options.originalDomNodeReplaced ?? false,
+      semanticEquivalentFound: options.semanticEquivalentFound ?? false,
+    });
   }
   return best;
 }

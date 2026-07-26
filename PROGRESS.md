@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-Milestone 10 — final integration complete; draft PR publication pending.
+Milestone 11 — Legacy DPI same-page rerender and compile-retry hardening.
 
 ## Completed
 
@@ -18,13 +18,20 @@ Milestone 10 — final integration complete; draft PR publication pending.
 - Positive outcome verification, negative error markers, unexpected-popup
   failure, and OpenAI HTTP/WebSocket interception.
 - Polished local Studio, GitHub CI, visual QA screenshot, and manual test guide.
+- Stable `DemonstratedTargetDescriptor` evidence separated from ephemeral DOM,
+  generated ID/class, value, history, and page-instance identity.
+- Same-path live semantic frame resolution after the Legacy DPI save rerender.
+- Retry-safe compilation state, persistent redacted structural diagnostics, and
+  a targeted synthetic-fixture reset that preserves compiled workflows.
+- Browser-backed regressions for rerender/compile/run and 422 correction/retry
+  through the real Studio controls and managed-browser recorder.
 
 ## Tests
 
 - `npm run build`: passed.
-- `npm test`: 32/32 passed across 8 files.
-- `npm run test:security`: 4/4 passed.
-- `npm run test:e2e`: 13/13 passed in the full suite.
+- `npm test`: 36/36 passed across 8 files.
+- `npm run test:security`: 5/5 passed.
+- `npm run test:e2e`: 16/16 passed.
 
 ## Demo readiness
 
@@ -42,6 +49,5 @@ Ready for the bundled synthetic Lab Mode demonstration.
 
 ## Next actions
 
-1. Publish the branch only to `faxncba-rgb/visual-compiler2`.
-2. Observe GitHub CI and fix any environment-specific failure.
-3. Conduct the concise manual Lab Mode procedure.
+1. Publish only `codex/teach-by-demonstration-mvp`.
+2. Conduct the concise manual Legacy DPI layout A retest.

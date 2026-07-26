@@ -12,6 +12,16 @@ import type {
 
 export const fixtureOrigin = "http://127.0.0.1:4273";
 
+export async function consultationEditor(page: Page) {
+  if (
+    (await page.locator('iframe[title="Éditeur de consultation"]').count()) > 0
+  )
+    return page
+      .frameLocator('iframe[title="Éditeur de consultation"]')
+      .getByLabel("Texte de consultation", { exact: true });
+  return page.getByLabel("Texte de consultation", { exact: true });
+}
+
 export async function withManagedBrowser<T>(
   url: string,
   operation: (details: {
@@ -47,9 +57,8 @@ export async function teachPrimaryWorkflow(details: {
   const value = details.value ?? "Consultation synthétique locale VC2";
 
   // Authentication/manual-navigation phase: recorder is attached but inactive.
-  await page
-    .getByLabel("Texte de consultation")
-    .fill("AUTH-PHASE-NOT-RECORDED");
+  const authenticationEditor = await consultationEditor(page);
+  await authenticationEditor.fill("AUTH-PHASE-NOT-RECORDED");
   await page.waitForTimeout(380);
   if (recorder.status().actionCount !== 0)
     throw new Error("Recorder captured an event before Start teaching.");
@@ -65,14 +74,20 @@ export async function teachPrimaryWorkflow(details: {
   });
   await page.getByLabel("Synthetic password").fill("NEVER-RECORD-THIS");
 
-  const editor = page.getByLabel("Texte de consultation");
+  const editor = await consultationEditor(page);
   await editor.click();
-  await editor.fill(value);
+  await editor.press("ControlOrMeta+A");
+  await editor.pressSequentially(value);
   await page.waitForTimeout(380);
   await page.getByRole("button", { name: "Enregistrer", exact: true }).click();
   await page
     .getByText("Consultation synthétique enregistrée.", { exact: true })
     .waitFor();
+  await page
+    .locator("[data-vc-consultation-history] > li")
+    .filter({ hasText: "Consultation synthétique enregistrée" })
+    .waitFor();
+  await consultationEditor(page);
   const session = await recorder.stop();
   return {
     session,

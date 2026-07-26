@@ -1,6 +1,7 @@
 import type { BrowserContext, Frame, Page } from "playwright";
 import {
   PageContextGraphSchema,
+  type DemonstratedTargetDescriptor,
   type PageContextGraphData,
   type RecordedPageContext,
 } from "../../demonstration-ir/src";
@@ -19,6 +20,12 @@ export type PageGraphEvent =
       context: RecordedPageContext;
       parentContextId: string;
     };
+
+export type LiveTargetRootResolution = {
+  root?: Page | Frame;
+  originalDomNodeReplaced: boolean;
+  semanticEquivalentFound: boolean;
+};
 
 function safeCanonical(url: string) {
   try {
@@ -180,6 +187,13 @@ export class PageContextGraph {
       else void this.updateFrame(frame);
     });
     page.on("frameattached", (frame) => void this.ensureFrame(frame));
+    page.on("framedetached", (frame) => {
+      const frameId = this.#frameIds.get(frame);
+      if (!frameId) return;
+      const current = this.#nodes.get(frameId);
+      if (current)
+        this.#nodes.set(frameId, { ...current, status: "closed" as const });
+    });
   }
 
   async updatePage(page: Page) {
@@ -295,6 +309,68 @@ export class PageContextGraph {
 
   node(id: string) {
     return this.#nodes.get(id);
+  }
+
+  async resolveLiveTargetRoot(
+    recordedContextId: string,
+    frameIdentity: DemonstratedTargetDescriptor["frame"],
+  ): Promise<LiveTargetRootResolution> {
+    if (frameIdentity.role === "main") {
+      const original = this.#pages.get(recordedContextId);
+      if (original && !original.isClosed()) {
+        return {
+          root: original,
+          originalDomNodeReplaced: false,
+          semanticEquivalentFound: false,
+        };
+      }
+      const matches = this.context.pages().filter((page) => {
+        if (page.isClosed()) return false;
+        const canonical = safeCanonical(page.url());
+        return (
+          canonical.origin === frameIdentity.origin &&
+          canonical.pathname === frameIdentity.pathname
+        );
+      });
+      return {
+        ...(matches.length === 1 ? { root: matches[0] } : {}),
+        originalDomNodeReplaced: Boolean(original),
+        semanticEquivalentFound: matches.length === 1,
+      };
+    }
+
+    const original = this.#frames.get(recordedContextId);
+    if (original && !original.isDetached()) {
+      return {
+        root: original,
+        originalDomNodeReplaced: false,
+        semanticEquivalentFound: false,
+      };
+    }
+    const matches: Frame[] = [];
+    for (const page of this.context.pages()) {
+      if (page.isClosed()) continue;
+      for (const frame of page.frames()) {
+        if (frame === page.mainFrame() || frame.isDetached()) continue;
+        const canonical = safeCanonical(frame.url());
+        if (
+          canonical.origin !== frameIdentity.origin ||
+          canonical.pathname !== frameIdentity.pathname
+        )
+          continue;
+        if (frameIdentity.name && frame.name() !== frameIdentity.name) continue;
+        if (frameIdentity.title) {
+          const currentTitle = await frame.title().catch(() => "");
+          if (titlePattern(currentTitle) !== frameIdentity.title) continue;
+        }
+        matches.push(frame);
+      }
+    }
+    return {
+      ...(matches.length === 1 ? { root: matches[0] } : {}),
+      originalDomNodeReplaced: Boolean(original),
+      semanticEquivalentFound: matches.length === 1,
+    };
   }
 
   data(): PageContextGraphData {

@@ -85,12 +85,14 @@ function consultationSection(mode: string) {
       data-vc-action="save-consultation" onclick="return saveConsultation(event)">Enregistrer</a>
     <p class="status" role="status" data-vc-outcome="pending">Aucune modification enregistrée.</p>
     <p class="meta">Activations Enregistrer : <strong data-vc-save-count>0</strong></p>
+    <h3>Historique des consultations</h3>
+    <ol data-vc-consultation-history></ol>
   </section>`;
 }
 
 export function renderFixture(url: URL) {
   const variant = url.searchParams.get("variant") === "B" ? "B" : "A";
-  const editor = url.searchParams.get("editor") ?? "textarea";
+  const editor = url.searchParams.get("editor") ?? "iframe";
   const shouldFail = url.searchParams.get("fail") === "1";
   const first = variant === "A" ? identitySection() : readonlySection();
   const second = variant === "A" ? readonlySection() : identitySection();
@@ -114,7 +116,7 @@ export function renderFixture(url: URL) {
         <h1>Consultation synthétique</h1>
         <span class="meta">Variante ${variant}</span>
       </div>
-      <form class="record-grid" onsubmit="return saveConsultation(event)">
+      <form name="consultation-record" class="record-grid" onsubmit="return saveConsultation(event)">
         ${first}
         ${second}
         ${consultationSection(editor)}
@@ -132,7 +134,8 @@ export function renderFixture(url: URL) {
     }
     window.__validationDone = function(ok) {
       const status = document.querySelector('[data-vc-outcome]');
-      if (!ok || shouldFail || !consultationValue().trim()) {
+      const savedConsultation = consultationValue();
+      if (!ok || shouldFail || !savedConsultation.trim()) {
         status.dataset.vcOutcome = 'error';
         status.className = 'status error';
         status.textContent = 'Erreur applicative synthétique : consultation non enregistrée.';
@@ -141,6 +144,19 @@ export function renderFixture(url: URL) {
       status.dataset.vcOutcome = 'success';
       status.className = 'status success';
       status.textContent = 'Consultation synthétique enregistrée.';
+      const history = document.querySelector('[data-vc-consultation-history]');
+      const entry = document.createElement('li');
+      entry.textContent = 'Consultation synthétique enregistrée · entrée ' + saves;
+      history.append(entry);
+      const frame = document.querySelector('[data-vc-field="consultation-frame"]');
+      if (frame) {
+        const replacement = frame.cloneNode(false);
+        replacement.addEventListener('load', () => {
+          const editor = replacement.contentDocument?.querySelector('[data-vc-field="consultation"]');
+          if (editor) editor.value = savedConsultation;
+        }, { once: true });
+        frame.replaceWith(replacement);
+      }
     };
     window.saveConsultation = function(event) {
       event.preventDefault();

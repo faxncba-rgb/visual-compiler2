@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   generateLocatorCandidates,
+  LocatorValidationError,
   rankLocatorCandidates,
   selectDemonstratedLocator,
   validateCapturedLocatorCandidates,
@@ -49,5 +50,45 @@ describe("demonstration-first locator engine", () => {
     });
     expect(selected.matchCount).toBe(1);
     expect(selected.explanation).toContain("transient context had closed");
+  });
+
+  it("reports redacted structural rejection evidence", () => {
+    try {
+      selectDemonstratedLocator(
+        [
+          candidate({
+            matchCount: 2,
+            visibleCount: 2,
+            enabledCount: 2,
+            editableCount: 2,
+            typeCompatibleCount: 2,
+            unique: false,
+          }),
+        ],
+        {
+          requireEditable: true,
+          target: target(),
+          action: "fill",
+          originalDomNodeReplaced: true,
+          semanticEquivalentFound: true,
+        },
+      );
+      throw new Error("Expected locator validation to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(LocatorValidationError);
+      expect((error as LocatorValidationError).evidence).toMatchObject({
+        recordedTargetFamily: "multiline-text",
+        actionCompatibility: ["fill"],
+        candidateCounts: {
+          total: 2,
+          visible: 2,
+          enabled: 2,
+          editable: 2,
+          typeCompatible: 2,
+        },
+        originalDomNodeReplaced: true,
+        semanticEquivalentFound: true,
+      });
+    }
   });
 });

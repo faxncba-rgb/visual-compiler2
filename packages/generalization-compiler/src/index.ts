@@ -298,20 +298,30 @@ async function compileSteps(
     let candidates: Awaited<ReturnType<typeof validateLocatorCandidates>> = [];
     let selectedLocatorId: string | undefined;
     if (action.target) {
-      const root =
-        action.target.frame.role === "main"
-          ? graph.page(action.pageContextId)
-          : graph.frame(action.pageContextId);
-      if (!root)
-        throw new Error(
-          `Cannot validate demonstrated target in page context ${action.pageContextId}.`,
-        );
-      candidates =
-        "isClosed" in root && root.isClosed()
-          ? validateCapturedLocatorCandidates(action.target)
-          : await validateLocatorCandidates(root, action.target);
+      const liveResolution = await graph.resolveLiveTargetRoot(
+        action.pageContextId,
+        action.target.descriptor?.frame ?? {
+          role: action.target.frame.role,
+          name: action.target.frame.name,
+          title: action.target.frame.title,
+          origin: action.target.frame.origin,
+          pathname: action.target.frame.pathname,
+        },
+      );
+      const recordedPage = graph.page(action.pageContextId);
+      const useCapturedClosedPage =
+        !liveResolution.root && recordedPage?.isClosed();
+      candidates = useCapturedClosedPage
+        ? validateCapturedLocatorCandidates(action.target)
+        : liveResolution.root
+          ? await validateLocatorCandidates(liveResolution.root, action.target)
+          : [];
       const selected = selectDemonstratedLocator(candidates, {
         requireEditable: ["fill", "select"].includes(action.action),
+        target: action.target,
+        action: action.action,
+        originalDomNodeReplaced: liveResolution.originalDomNodeReplaced,
+        semanticEquivalentFound: liveResolution.semanticEquivalentFound,
       });
       selectedLocatorId = selected.id;
     }
@@ -464,6 +474,24 @@ function generatedLocator(
   if (rule.strategy === "container-role-name") {
     const container = `${root}.locator('section,form,article,[role=dialog],[role=region]').filter({ has: ${root}.getByRole('heading', { name: ${JSON.stringify(rule.containerHeading)}, exact: true }) })`;
     return `${container}.getByRole(${JSON.stringify(rule.role)}, { name: ${JSON.stringify(rule.name)}, exact: true })`;
+  }
+  if (rule.strategy === "form-ownership") {
+    const selectors = {
+      "multiline-text":
+        'textarea,[contenteditable="true"][role="textbox"],[contenteditable="true"]',
+      "single-line-text":
+        'input:not([type="hidden"]):not([type="password"]),[role="textbox"]:not(textarea)',
+      selection: "select,[role=combobox],[role=listbox]",
+      toggle:
+        'input[type="checkbox"],input[type="radio"],[role=checkbox],[role=radio],[role=switch]',
+      button: "button,[role=button],input[type=submit],input[type=button]",
+      link: "a,[role=link]",
+      other: "*",
+    };
+    const family =
+      rule.controlFamily &&
+      selectors[rule.controlFamily as keyof typeof selectors];
+    return `${root}.locator(${JSON.stringify(`form[name="${rule.formName}"]`)}).locator(${JSON.stringify(family ?? "*")})`;
   }
   return `${root}.locator(${JSON.stringify(rule.structuralPath ?? candidate.selectorPreview)})`;
 }

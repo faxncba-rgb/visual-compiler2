@@ -37,6 +37,10 @@ import {
   type LocalVariableValues,
 } from "../../../../packages/workflow-variables/src";
 import { safeTelemetryMessage } from "../../../../packages/telemetry/src";
+import {
+  LocatorValidationError,
+  type LocatorValidationEvidence,
+} from "../../../../packages/locator-engine/src";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendDirectory = path.resolve(moduleDirectory, "../../frontend");
@@ -53,6 +57,7 @@ export type StudioCompilationDiagnostic = {
   httpStatus: number;
   compilerStage: StudioCompilationStage;
   serverMessage: string;
+  structuralEvidence?: LocatorValidationEvidence;
 };
 
 class StudioCompilationFailure extends Error {
@@ -64,6 +69,19 @@ class StudioCompilationFailure extends Error {
   ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
   }
+}
+
+function findLocatorValidationEvidence(
+  error: unknown,
+): LocatorValidationEvidence | undefined {
+  let current = error;
+  const visited = new Set<unknown>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    if (current instanceof LocatorValidationError) return current.evidence;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
 }
 
 function sendJson(response: ServerResponse, status: number, value: unknown) {
@@ -297,6 +315,8 @@ export class StudioController {
     if (!this.session) throw new Error("No demonstration is available.");
     this.#mutation = "compile";
     this.machine.transition("COMPILING");
+    const previousWorkflow = this.workflow;
+    const previousAiPayload = this.aiPayload;
     let stage: StudioCompilationStage = "demonstration-validation";
     try {
       this.generalizationInstruction =
@@ -317,7 +337,9 @@ export class StudioController {
       await this.persistRecoverableState();
       return this.workflow;
     } catch (error) {
-      this.machine.transition("FAILED");
+      this.workflow = previousWorkflow;
+      this.aiPayload = previousAiPayload;
+      this.machine.transition("DEMONSTRATION_REVIEW");
       throw new StudioCompilationFailure(
         error instanceof CompilationStageError ? error.stage : stage,
         error,
@@ -332,6 +354,7 @@ export class StudioController {
       ...Object.values(this.localValues).map(String),
       this.generalizationInstruction,
     ];
+    const structuralEvidence = findLocatorValidationEvidence(error);
     const diagnostic: StudioCompilationDiagnostic = {
       id: createId("compile-diagnostic"),
       occurredAt: new Date().toISOString(),
@@ -343,6 +366,7 @@ export class StudioController {
             ? error.stage
             : "request-validation",
       serverMessage: safeTelemetryMessage(error, sensitiveValues),
+      ...(structuralEvidence ? { structuralEvidence } : {}),
     };
     this.compilationDiagnostic = diagnostic;
     this.studioEventLog.push(diagnostic);
@@ -368,6 +392,23 @@ export class StudioController {
 
   clearCompilationDiagnostic() {
     this.compilationDiagnostic = undefined;
+  }
+
+  async resetSyntheticFixture() {
+    if (!this.browser.status().open)
+      throw new Error("Open the managed browser before resetting the fixture.");
+    if (
+      ["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state) ||
+      this.#mutation
+    )
+      throw new Error(
+        "The synthetic fixture cannot be reset while an operation is active.",
+      );
+    for (const page of this.browser.context.pages()) {
+      if (page !== this.browser.mainPage && !page.isClosed())
+        await page.close().catch(() => undefined);
+    }
+    await this.browser.navigate(this.targetUrl);
   }
 
   async run(mode: unknown) {
@@ -518,6 +559,10 @@ export function createStudioServer(controller = new StudioController()) {
         url.pathname === "/api/browser/authentication-complete"
       ) {
         await controller.authenticationComplete();
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (request.method === "POST" && url.pathname === "/api/fixture/reset") {
+        await controller.resetSyntheticFixture();
         return sendJson(response, 200, controller.snapshot());
       }
       if (request.method === "POST" && url.pathname === "/api/teaching/start") {

@@ -5,6 +5,7 @@ import {
 } from "../../packages/deterministic-runtime/src";
 import {
   compilePrimary,
+  consultationEditor,
   fixtureOrigin,
   teachPrimaryWorkflow,
   withManagedBrowser,
@@ -100,7 +101,7 @@ test.describe("required demonstration-first consultation workflow", () => {
         expect(first.state).toBe("Passed");
         expect(first.llmCalls).toBe(0);
         expect(first.openAIRequests).toBe(0);
-        await expect(page.getByLabel("Texte de consultation")).toHaveValue(
+        await expect(await consultationEditor(page)).toHaveValue(
           demonstratedValue,
         );
         await expect(page.locator('[name="date_consultation"]')).toHaveValue(

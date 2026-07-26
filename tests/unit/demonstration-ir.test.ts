@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CompiledLoopSchema,
   DemonstrationSessionSchema,
+  DemonstratedTargetDescriptorSchema,
 } from "../../packages/demonstration-ir/src";
-import { loop, session } from "../helpers/factories";
+import { loop, session, target } from "../helpers/factories";
 
 describe("Demonstration IR", () => {
   it("validates a parameterized demonstration with no raw local value", () => {
@@ -26,5 +27,26 @@ describe("Demonstration IR", () => {
         maximumIterations: 0,
       }),
     ).toThrow();
+  });
+
+  it("keeps mutable DOM and consultation-history evidence out of the target descriptor", () => {
+    const parsed = DemonstratedTargetDescriptorSchema.parse({
+      ...target().descriptor!,
+      currentValue: "MUST-NOT-BE-PRESERVED",
+      generatedId: "generated-123",
+      generatedClass: "render-456",
+      consultationHistory: ["saved row"],
+      pageInstanceId: "page-instance-1",
+      recordingSessionNodeId: "node-1",
+      timestamp: "2026-07-26T00:00:00.000Z",
+    });
+    expect(parsed).toMatchObject({
+      controlFamily: "multiline-text",
+      multiline: true,
+      editable: true,
+    });
+    expect(JSON.stringify(parsed)).not.toMatch(
+      /MUST-NOT-BE-PRESERVED|generated-123|render-456|saved row|page-instance|node-1|2026-07-26/,
+    );
   });
 });

@@ -47,6 +47,35 @@ describe("high-level recorder", () => {
     expect(actions.map((entry) => entry.action)).toEqual(["click", "fill"]);
   });
 
+  it("drops the duplicate change event emitted after a filled editor loses focus", () => {
+    const fill = action({
+      id: "fill-1",
+      action: "fill",
+      valueRef: "{{consultation_text}}",
+      timestampOffsetMs: 400,
+    });
+    const actions = [
+      fill,
+      action({
+        id: "save-click",
+        pageContextId: "page-main",
+        timestampOffsetMs: 510,
+      }),
+    ];
+    const result = deduplicateAction(
+      actions,
+      action({
+        id: "fill-change",
+        action: "fill",
+        valueRef: "{{consultation_text}}",
+        timestampOffsetMs: 510,
+      }),
+    );
+    expect(result).toBe("replaced");
+    expect(actions).toHaveLength(2);
+    expect(actions[0]?.id).toBe("fill-1");
+  });
+
   it("parameterizes consultation, date, time, and option fields", () => {
     expect(variableNameForTarget(target())).toBe("consultation_text");
     expect(

@@ -78,4 +78,16 @@ describe("Studio state machine", () => {
     machine.transition("COMPILING");
     expect(() => machine.transition("COMPILING")).toThrow();
   });
+
+  it("returns a rejected compilation to review for an immediate retry", () => {
+    const machine = new StudioStateMachine();
+    machine.transition("BROWSER_OPEN");
+    machine.transition("READY_TO_TEACH");
+    machine.transition("RECORDING");
+    machine.transition("DEMONSTRATION_REVIEW");
+    machine.transition("COMPILING");
+    machine.transition("DEMONSTRATION_REVIEW");
+    machine.transition("COMPILING");
+    expect(machine.state).toBe("COMPILING");
+  });
 });

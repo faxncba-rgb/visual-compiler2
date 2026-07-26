@@ -237,7 +237,7 @@ function renderLocators(workflow) {
       textElement(
         "span",
         "",
-        `${step.name} · matches ${candidate.matchCount} · visible ${candidate.visibleCount} · enabled ${candidate.enabledCount} · confidence ${Math.round(candidate.confidence * 100)}%`,
+        `${step.name} · matches ${candidate.matchCount} · visible ${candidate.visibleCount} · enabled ${candidate.enabledCount} · type-compatible ${candidate.typeCompatibleCount} · confidence ${Math.round(candidate.confidence * 100)}%`,
       ),
     );
     container.append(card);
@@ -245,13 +245,20 @@ function renderLocators(workflow) {
 }
 
 function formatCompilationDiagnostic(diagnostic) {
-  return [
+  const lines = [
     `HTTP status: ${diagnostic.httpStatus}`,
     `Compiler stage: ${diagnostic.compilerStage}`,
     `Occurred at: ${diagnostic.occurredAt}`,
     "Redacted server message:",
     diagnostic.serverMessage,
-  ].join("\n");
+  ];
+  if (diagnostic.structuralEvidence) {
+    lines.push(
+      "Redacted structural evidence:",
+      JSON.stringify(diagnostic.structuralEvidence, null, 2),
+    );
+  }
+  return lines.join("\n");
 }
 
 function renderCompilationDiagnostics(diagnostic) {
@@ -261,11 +268,15 @@ function renderCompilationDiagnostics(diagnostic) {
     $("#diagnosticHttpStatus").textContent = "—";
     $("#diagnosticCompilerStage").textContent = "—";
     $("#diagnosticServerMessage").textContent = "";
+    $("#diagnosticStructuralEvidence").textContent = "";
     return;
   }
   $("#diagnosticHttpStatus").textContent = String(diagnostic.httpStatus);
   $("#diagnosticCompilerStage").textContent = diagnostic.compilerStage;
   $("#diagnosticServerMessage").textContent = diagnostic.serverMessage;
+  $("#diagnosticStructuralEvidence").textContent = diagnostic.structuralEvidence
+    ? JSON.stringify(diagnostic.structuralEvidence, null, 2)
+    : "No locator structural evidence was produced for this failure.";
 }
 
 function renderStudioEventLog(events = []) {
@@ -290,6 +301,13 @@ function renderButtons() {
   ].includes(current);
   $("#compile").disabled =
     current !== "DEMONSTRATION_REVIEW" || requestInFlight;
+  $("#compile").textContent = state?.compilationDiagnostic
+    ? "Retry compile"
+    : "Compile";
+  $("#resetSyntheticFixture").disabled =
+    !state?.browser?.open ||
+    requestInFlight ||
+    ["RECORDING", "COMPILING", "RUNNING"].includes(current);
   $("#animatedRun").disabled =
     !hasWorkflow ||
     !["READY_TO_RUN", "PASSED", "FAILED", "STOPPED"].includes(current);
@@ -399,6 +417,15 @@ $("#authComplete").addEventListener(
       "/api/browser/authentication-complete",
       {},
       "Ready to teach on the authorized synthetic record.",
+    ),
+);
+$("#resetSyntheticFixture").addEventListener(
+  "click",
+  () =>
+    void mutate(
+      "/api/fixture/reset",
+      {},
+      "Synthetic fixture restored without changing the Studio artifact.",
     ),
 );
 $("#startTeaching").addEventListener(

@@ -7,6 +7,7 @@ import {
   StudioController,
   createStudioServer,
 } from "../../apps/studio/backend/src/server";
+import { locatorForRule } from "../../packages/locator-engine/src";
 
 async function listenOnEphemeralPort(server: Server) {
   await new Promise<void>((resolve, reject) => {
@@ -68,29 +69,63 @@ async function teachLegacyLayoutA(
   await expect(page.locator("#studioState")).toHaveText("RECORDING");
 
   const managedPage = controller.browser.mainPage;
-  await managedPage
-    .getByLabel("Texte de consultation", { exact: true })
-    .fill(demonstratedValue);
+  const initialSchedule = await managedPage.evaluate(() => ({
+    date: (
+      document.querySelector('[name="date_consultation"]') as HTMLInputElement
+    ).value,
+    time: (
+      document.querySelector('[name="heure_consultation"]') as HTMLInputElement
+    ).value,
+  }));
+  await expect(
+    managedPage.locator("[data-vc-consultation-history] > li"),
+  ).toHaveCount(0);
+  const editor = managedPage
+    .frameLocator('iframe[title="Éditeur de consultation"]')
+    .getByLabel("Texte de consultation", { exact: true });
+  await editor.click();
+  await editor.pressSequentially(demonstratedValue);
+  await managedPage.waitForTimeout(380);
   await managedPage
     .getByRole("button", { name: "Enregistrer", exact: true })
     .click();
   await managedPage
     .getByText("Consultation synthétique enregistrée.", { exact: true })
     .waitFor();
+  await expect(
+    managedPage.locator("[data-vc-consultation-history] > li"),
+  ).toHaveCount(1);
+  await expect(
+    managedPage
+      .frameLocator('iframe[title="Éditeur de consultation"]')
+      .getByLabel("Texte de consultation", { exact: true }),
+  ).toBeVisible();
+  await expect(managedPage.locator('[name="date_consultation"]')).toHaveValue(
+    initialSchedule.date,
+  );
+  await expect(managedPage.locator('[name="heure_consultation"]')).toHaveValue(
+    initialSchedule.time,
+  );
 
   await page
     .getByRole("button", { name: "Stop teaching", exact: true })
     .click();
   await expect(page.locator("#studioState")).toHaveText("DEMONSTRATION_REVIEW");
   await expect(page.getByLabel("Instruction", { exact: true })).toHaveValue("");
+  return { initialSchedule };
 }
 
-test("Legacy DPI layout A compiles through the Studio response contract", async ({
+test("Legacy DPI layout A survives same-path editor rerender, compiles and runs through Studio controls", async ({
   page,
 }) => {
   await withIsolatedStudio(async ({ controller, studioOrigin }) => {
     const demonstratedValue = "SYNTHETIC-LEGACY-LAYOUT-A";
-    await teachLegacyLayoutA(page, controller, studioOrigin, demonstratedValue);
+    const { initialSchedule } = await teachLegacyLayoutA(
+      page,
+      controller,
+      studioOrigin,
+      demonstratedValue,
+    );
 
     await page.getByRole("button", { name: "Compile", exact: true }).click();
 
@@ -105,9 +140,179 @@ test("Legacy DPI layout A compiles through the Studio response contract", async 
       controller.workflow?.steps.find((step) => step.action === "fill")?.target
         ?.associatedLabel,
     ).toBe("Texte de consultation");
+    const fillStep = controller.workflow?.steps.find(
+      (step) => step.action === "fill",
+    );
+    expect(
+      controller.workflow?.steps.filter((step) => step.action === "fill"),
+    ).toHaveLength(1);
+    const selected = fillStep?.locatorCandidates.find(
+      (candidate) => candidate.id === fillStep.selectedLocatorId,
+    );
+    expect(fillStep?.target?.descriptor).toMatchObject({
+      controlFamily: "multiline-text",
+      actionCompatibility: ["fill"],
+      multiline: true,
+      editable: true,
+      hostFormName: "consultation-record",
+      semanticContainer: {
+        heading: "Consultation",
+      },
+      precedingLabels: expect.arrayContaining(["Date", "Heure"]),
+      relatedActionName: "Enregistrer",
+      frame: {
+        role: "same-origin",
+        pathname: "/fixture/editor-frame",
+      },
+    });
+    expect(selected).toBeDefined();
+    const resolution = await controller.browser.graph.resolveLiveTargetRoot(
+      fillStep!.pageContextId,
+      fillStep!.target!.descriptor!.frame,
+    );
+    expect(resolution.originalDomNodeReplaced).toBe(true);
+    expect(resolution.semanticEquivalentFound).toBe(true);
+    expect(await locatorForRule(resolution.root!, selected!.rule).count()).toBe(
+      1,
+    );
+    expect(
+      await locatorForRule(resolution.root!, selected!.rule).evaluate(
+        (element) => ({
+          tag: element.tagName.toLowerCase(),
+          field: element.getAttribute("data-vc-field"),
+        }),
+      ),
+    ).toEqual({ tag: "textarea", field: "consultation" });
+    expect(JSON.stringify(selected!.rule)).not.toMatch(
+      /Date|Heure|date_consultation|heure_consultation/,
+    );
     expect(JSON.stringify(controller.workflow)).not.toContain(
       demonstratedValue,
     );
+
+    const saveCountBeforeRun = Number(
+      await controller.browser.mainPage
+        .locator("[data-vc-save-count]")
+        .innerText(),
+    );
+    await page
+      .getByRole("button", { name: "Run locally", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText("PASSED");
+    await expect(
+      controller.browser.mainPage
+        .frameLocator('iframe[title="Éditeur de consultation"]')
+        .getByLabel("Texte de consultation", { exact: true }),
+    ).toHaveValue(demonstratedValue);
+    await expect(
+      controller.browser.mainPage.locator('[name="date_consultation"]'),
+    ).toHaveValue(initialSchedule.date);
+    await expect(
+      controller.browser.mainPage.locator('[name="heure_consultation"]'),
+    ).toHaveValue(initialSchedule.time);
+    await expect(
+      controller.browser.mainPage.locator("[data-vc-save-count]"),
+    ).toHaveText(String(saveCountBeforeRun + 1));
+    await expect(
+      controller.browser.mainPage.locator(
+        "[data-vc-consultation-history] > li",
+      ),
+    ).toHaveCount(2);
+    expect(controller.telemetry).toMatchObject({
+      state: "Passed",
+      llmCalls: 0,
+      openAIRequests: 0,
+    });
+
+    await page
+      .getByRole("button", {
+        name: "Reset synthetic fixture",
+        exact: true,
+      })
+      .click();
+    await expect(
+      controller.browser.mainPage.locator(
+        "[data-vc-consultation-history] > li",
+      ),
+    ).toHaveCount(0);
+    expect(controller.workflow).toBeDefined();
+    await expect(
+      page.getByRole("button", { name: "Run again", exact: true }),
+    ).toBeEnabled();
+  });
+});
+
+test("a locator 422 exposes structural evidence and can be corrected and retried without re-teaching", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await teachLegacyLayoutA(
+      page,
+      controller,
+      studioOrigin,
+      "SYNTHETIC-RETRY-VALUE",
+    );
+    const sessionId = controller.session?.id;
+    const demonstratedActionCount = controller.session?.actions.length;
+    const liveEditorFrame = controller.browser.mainPage
+      .frames()
+      .find((frame) => frame.url().endsWith("/fixture/editor-frame"));
+    expect(liveEditorFrame).toBeDefined();
+    await liveEditorFrame!.evaluate(() => {
+      const original = document.querySelector(
+        '[data-vc-field="consultation"]',
+      ) as HTMLTextAreaElement;
+      const originalLabel = document.querySelector(
+        `label[for="${original.id}"]`,
+      ) as HTMLLabelElement;
+      const duplicateLabel = originalLabel.cloneNode(true) as HTMLLabelElement;
+      const duplicate = original.cloneNode(true) as HTMLTextAreaElement;
+      duplicate.id = `${original.id}-duplicate`;
+      duplicate.dataset.vcDuplicate = "true";
+      duplicateLabel.htmlFor = duplicate.id;
+      duplicateLabel.dataset.vcDuplicate = "true";
+      document.body.append(duplicateLabel, duplicate);
+    });
+
+    await page.getByRole("button", { name: "Compile", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "DEMONSTRATION_REVIEW",
+    );
+    await expect(page.locator("#compilationDiagnostics")).toBeVisible();
+    await expect(page.locator("#diagnosticHttpStatus")).toHaveText("422");
+    await expect(page.locator("#diagnosticCompilerStage")).toHaveText(
+      "locator-validation",
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"recordedTargetFamily": "multiline-text"',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"total": 2',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"originalDomNodeReplaced": true',
+    );
+    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+      '"semanticEquivalentFound": true',
+    );
+    const retry = page.getByRole("button", {
+      name: "Retry compile",
+      exact: true,
+    });
+    await expect(retry).toBeEnabled();
+    expect(controller.session?.id).toBe(sessionId);
+    expect(controller.session?.actions.length).toBe(demonstratedActionCount);
+    expect(controller.generalizationInstruction).toBe("");
+
+    await liveEditorFrame!
+      .locator("[data-vc-duplicate=true]")
+      .evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
+    await retry.click();
+    await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+    await expect(page.locator("#compilationDiagnostics")).toBeHidden();
+    expect(controller.session?.id).toBe(sessionId);
+    expect(controller.session?.actions.length).toBe(demonstratedActionCount);
+    expect(controller.workflow?.compileMode).toBe("direct-demonstration");
   });
 });
 
@@ -138,8 +343,16 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
         await page
           .getByRole("button", { name: "Compile", exact: true })
           .click();
-        await expect(page.locator("#studioState")).toHaveText("FAILED");
+        await expect(page.locator("#studioState")).toHaveText(
+          "DEMONSTRATION_REVIEW",
+        );
         await expect(page.locator("#compilationDiagnostics")).toBeVisible();
+        await expect(
+          page.getByRole("button", {
+            name: "Retry compile",
+            exact: true,
+          }),
+        ).toBeEnabled();
       } finally {
         console.error = originalConsoleError;
       }

@@ -15,7 +15,10 @@ import type {
 } from "../../page-context-graph/src";
 import { canonicalizeUrl, createId, sha256 } from "../../shared/src";
 
-type BrowserTargetPayload = Omit<DemonstratedTarget, "frame">;
+type BrowserTargetPayload = Omit<DemonstratedTarget, "frame" | "descriptor"> & {
+  precedingLabels?: string[];
+  relatedActionName?: string;
+};
 
 export type CapturedBrowserEvent = {
   kind:
@@ -126,6 +129,13 @@ const RECORDER_INIT_SCRIPT = `(() => {
         const candidate = node.getBoundingClientRect();
         return candidate.width > 0 && candidate.height > 0 && Math.abs(candidate.top - box.top) < 180;
       }).slice(0, 8).map(node => text(node.textContent)).filter(Boolean);
+    const precedingLabels = Array.from(document.querySelectorAll('label,h1,h2,h3,th'))
+      .filter(node => node.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .slice(-8).map(node => text(node.textContent)).filter(Boolean);
+    const relatedActionName = text(
+      (element.closest('form,section,article,[role=dialog],[role=region]') || document)
+        .querySelector('button,[role=button],a[data-vc-action]')?.textContent
+    ) || undefined;
     const semantic = container ? {
       tag: container.tagName.toLowerCase(),
       heading: text(heading?.textContent) || undefined,
@@ -161,6 +171,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
       nearbyVisibleLabels: nearby,
       boundingBox: { x: box.x, y: box.y, width: box.width, height: box.height },
       rowColumnEvidence: nearby.slice(0, 3).map(value => ({ relation: 'same-row', text: value })),
+      precedingLabels,
+      relatedActionName,
       stableAttributes,
       unstableAttributes: ['id','class'],
       structuralPath: cssPath(element),
@@ -258,12 +270,108 @@ export function variableNameForTarget(target: BrowserTargetPayload) {
     .toLowerCase()}`;
 }
 
+function controlFamilyForTarget(target: BrowserTargetPayload) {
+  const tag = target.tag.toLowerCase();
+  const role = target.role?.toLowerCase();
+  const inputType = target.inputType?.toLowerCase();
+  if (
+    tag === "textarea" ||
+    target.editorAdapter === "contenteditable" ||
+    target.editorAdapter === "legacy-facade"
+  )
+    return "multiline-text" as const;
+  if (tag === "select" || role === "combobox" || role === "listbox")
+    return "selection" as const;
+  if (
+    ["checkbox", "radio"].includes(inputType ?? "") ||
+    ["checkbox", "radio", "switch"].includes(role ?? "")
+  )
+    return "toggle" as const;
+  if (tag === "button" || role === "button") return "button" as const;
+  if (tag === "a" || role === "link") return "link" as const;
+  if (tag === "input" || role === "textbox") return "single-line-text" as const;
+  return "other" as const;
+}
+
+async function frameHostEvidence(frame: Frame) {
+  if (frame === frame.page().mainFrame()) return undefined;
+  const frameElement = await frame.frameElement();
+  return frameElement
+    .evaluate((element) => {
+      const host = element as Element;
+      const normalize = (value: string | null | undefined) =>
+        String(value ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120);
+      const container = host.closest(
+        "section,form,article,[role=dialog],[role=region]",
+      );
+      const heading = container?.querySelector("h1,h2,h3,[role=heading]");
+      const labelRoot: ParentNode = container ?? document;
+      const labels = Array.from(
+        labelRoot.querySelectorAll<Element>("label,h1,h2,h3,th"),
+      )
+        .map((node) => normalize(node.textContent))
+        .filter(Boolean)
+        .slice(0, 8);
+      const precedingLabels = Array.from(
+        document.querySelectorAll("label,h1,h2,h3,th"),
+      )
+        .filter((node) =>
+          Boolean(
+            node.compareDocumentPosition(host) &
+              Node.DOCUMENT_POSITION_FOLLOWING,
+          ),
+        )
+        .slice(-8)
+        .map((node) => normalize(node.textContent))
+        .filter(Boolean);
+      const action = container?.querySelector(
+        "button,[role=button],a[data-vc-action]",
+      );
+      return {
+        formName: host.closest("form")?.getAttribute("name") || undefined,
+        semanticContainer: container
+          ? {
+              tag: container.tagName.toLowerCase(),
+              heading: normalize(heading?.textContent) || undefined,
+              landmark: container.getAttribute("role") || undefined,
+            }
+          : undefined,
+        labels,
+        precedingLabels,
+        relatedActionName: normalize(action?.textContent) || undefined,
+      };
+    })
+    .catch(() => undefined);
+}
+
 export function deduplicateAction(
   actions: RecordedAction[],
   candidate: RecordedAction,
   windowMs = 850,
 ) {
   const previous = actions.at(-1);
+  if (["fill", "select"].includes(candidate.action)) {
+    let earlierInputIndex = -1;
+    for (let index = actions.length - 1; index >= 0; index -= 1) {
+      const action = actions[index]!;
+      if (
+        action.action === candidate.action &&
+        action.pageContextId === candidate.pageContextId &&
+        action.target?.fingerprint === candidate.target?.fingerprint &&
+        action.valueRef === candidate.valueRef &&
+        Math.abs(action.timestampOffsetMs - candidate.timestampOffsetMs) <=
+          windowMs
+      ) {
+        earlierInputIndex = index;
+        break;
+      }
+    }
+    if (earlierInputIndex >= 0 && earlierInputIndex !== actions.length - 1)
+      return "replaced" as const;
+  }
   if (
     previous &&
     previous.action === candidate.action &&
@@ -507,6 +615,12 @@ export class DemonstrationRecorder {
     }
     const pageContextId = await this.graph.contextIdForFrame(frame);
     const graphNode = this.graph.node(pageContextId);
+    const hostEvidence = payload.target
+      ? await frameHostEvidence(frame)
+      : undefined;
+    const targetFamily = payload.target
+      ? controlFamilyForTarget(payload.target)
+      : undefined;
     const target = payload.target
       ? DemonstratedTargetSchema.parse({
           ...payload.target,
@@ -519,6 +633,48 @@ export class DemonstrationRecorder {
               graphNode?.pathname ?? canonicalizeUrl(frame.url()).pathname,
             structuralFingerprint:
               graphNode?.structuralFingerprint ?? sha256(frame.url()),
+          },
+          descriptor: {
+            controlFamily: targetFamily,
+            multiline: targetFamily === "multiline-text",
+            editable: payload.target.editable,
+            actionCompatibility: [payload.kind],
+            tag: payload.target.tag,
+            role: payload.target.role,
+            accessibleName: payload.target.accessibleName,
+            associatedLabel: payload.target.associatedLabel,
+            formName: payload.target.formName,
+            hostFormName: hostEvidence?.formName,
+            semanticContainer: payload.target.semanticContainer
+              ? {
+                  tag: payload.target.semanticContainer.tag,
+                  heading: payload.target.semanticContainer.heading,
+                  landmark: payload.target.semanticContainer.landmark,
+                }
+              : hostEvidence?.semanticContainer,
+            neighboringLabels: [
+              ...new Set([
+                ...payload.target.nearbyVisibleLabels,
+                ...(hostEvidence?.labels ?? []),
+              ]),
+            ].slice(0, 8),
+            precedingLabels: [
+              ...new Set([
+                ...(hostEvidence?.precedingLabels ?? []),
+                ...(payload.target.precedingLabels ?? []),
+              ]),
+            ].slice(-8),
+            relatedActionName:
+              payload.target.relatedActionName ??
+              hostEvidence?.relatedActionName,
+            frame: {
+              role: frame === frame.page().mainFrame() ? "main" : "same-origin",
+              name: frame.name() || undefined,
+              title: graphNode?.titlePattern,
+              origin: graphNode?.origin ?? canonicalizeUrl(frame.url()).origin,
+              pathname:
+                graphNode?.pathname ?? canonicalizeUrl(frame.url()).pathname,
+            },
           },
         })
       : undefined;
