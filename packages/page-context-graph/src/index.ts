@@ -317,7 +317,14 @@ export class PageContextGraph {
   ): Promise<LiveTargetRootResolution> {
     if (frameIdentity.role === "main") {
       const original = this.#pages.get(recordedContextId);
-      if (original && !original.isClosed()) {
+      const originalCanonical =
+        original && !original.isClosed() ? safeCanonical(original.url()) : null;
+      if (
+        original &&
+        !original.isClosed() &&
+        originalCanonical?.origin === frameIdentity.origin &&
+        originalCanonical.pathname === frameIdentity.pathname
+      ) {
         return {
           root: original,
           originalDomNodeReplaced: false,

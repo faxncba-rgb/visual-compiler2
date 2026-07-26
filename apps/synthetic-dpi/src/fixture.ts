@@ -244,6 +244,29 @@ export function renderEditorFrame() {
   <textarea id="${id}" name="consultation_frame" data-vc-field="consultation" data-vc-editor="iframe"></textarea></body></html>`;
 }
 
+export function renderDataflowSource() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Source synthétique</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC ONLY</div>
+  <main><section aria-labelledby="source-heading">
+    <h1 id="source-heading">Source de transfert</h1>
+    <label for="copy-source">Texte source</label>
+    <textarea id="copy-source" readonly data-vc-copy-source="true">SYNTHETIC-RUNTIME-COPIED-CONTENT</textarea>
+    <a href="/fixture/dataflow-destination" data-vc-action="open-destination">Ouvrir la destination</a>
+  </section></main></body></html>`;
+}
+
+export function renderDataflowDestination() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Destination synthétique</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC ONLY</div>
+  <main><section aria-labelledby="destination-heading">
+    <h1 id="destination-heading">Destination de transfert</h1>
+    <label for="copy-destination">Texte destination</label>
+    <textarea id="copy-destination" data-vc-field="copy-destination"></textarea>
+  </section></main></body></html>`;
+}
+
 export function renderPopupWorkflow() {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Workflow popup synthétique</title>
   <style>${baseStyles}</style></head><body>

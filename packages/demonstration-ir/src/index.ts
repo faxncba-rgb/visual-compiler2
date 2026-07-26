@@ -40,6 +40,7 @@ export const DemonstratedTargetDescriptorSchema = z.object({
         "keyboard",
         "submit",
         "focus",
+        "extract",
       ]),
     )
     .min(1),
@@ -205,6 +206,7 @@ export const RecordedActionTypeSchema = z.enum([
   "popup-open",
   "popup-close",
   "focus",
+  "extract",
   "assert",
 ]);
 
@@ -239,6 +241,7 @@ export const RecordedActionSchema = z.object({
   target: DemonstratedTargetSchema.optional(),
   sequenceContext: DemonstratedSequenceContextSchema.optional(),
   value: WorkflowActionValueSchema.optional(),
+  outputVariable: z.string().regex(/^[a-z][a-z0-9_]*$/).optional(),
   valueRef: z.string().optional(),
   editingTransaction: z
     .object({
@@ -270,7 +273,12 @@ export const WorkflowVariableSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]*$/),
   valueType: z.enum(["string", "number", "boolean", "option"]),
   sourceActionId: z.string().optional(),
-  privacy: z.enum(["local-variable", "local-literal", "ai-instruction"]),
+  privacy: z.enum([
+    "local-variable",
+    "local-literal",
+    "runtime-derived",
+    "ai-instruction",
+  ]),
   required: z.boolean().default(true),
   description: z.string().optional(),
 });
@@ -457,6 +465,7 @@ export const CompiledStepSchema = z.object({
   locatorCandidates: z.array(LocatorCandidateSchema),
   selectedLocatorId: z.string().optional(),
   value: WorkflowActionValueSchema.optional(),
+  outputVariable: z.string().regex(/^[a-z][a-z0-9_]*$/).optional(),
   valueRef: z.string().optional(),
   localLiteral: z.string().optional(),
   inputStrategies: z

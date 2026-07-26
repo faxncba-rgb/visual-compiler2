@@ -1,6 +1,8 @@
 import { createServer, type Server } from "node:http";
 import {
   renderCrossOriginFrame,
+  renderDataflowDestination,
+  renderDataflowSource,
   renderDialogWorkflow,
   renderEditorFrame,
   renderFixture,
@@ -38,6 +40,10 @@ export function createSyntheticDpiServer() {
       return html(response, renderPopupAction());
     if (url.pathname === "/fixture/cross-origin")
       return html(response, renderCrossOriginFrame());
+    if (url.pathname === "/fixture/dataflow-source")
+      return html(response, renderDataflowSource());
+    if (url.pathname === "/fixture/dataflow-destination")
+      return html(response, renderDataflowDestination());
     if (url.pathname === "/fixture/dialogs")
       return html(response, renderDialogWorkflow());
     if (url.pathname === "/fixture/controls")

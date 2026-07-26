@@ -75,7 +75,8 @@ export type CapturedBrowserEvent = {
     | "uncheck"
     | "keyboard"
     | "submit"
-    | "focus";
+    | "focus"
+    | "extract";
   target?: BrowserTargetPayload;
   value?: string;
   valueSource?: "literal" | "runtime-variable";
@@ -591,6 +592,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
       compositionObserved: false,
       pasteObserved: false,
       selectionObserved: false,
+      valueSource: 'literal',
       lastPublishedValue: undefined
     };
     return activeEdit;
@@ -605,7 +607,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
       kind: edit.element instanceof HTMLSelectElement ? 'select' : 'fill',
       target: edit.target,
       value,
-      valueSource: 'literal',
+      valueSource: edit.valueSource,
       editingTransaction: {
         id: edit.id,
         startedAt: edit.startedAt,
@@ -663,7 +665,16 @@ const RECORDER_INIT_SCRIPT = `(() => {
   }, true);
   document.addEventListener('paste', event => {
     const edit = openEdit(event.target);
-    if (edit) edit.pasteObserved = true;
+    if (edit) {
+      edit.pasteObserved = true;
+      edit.valueSource = 'runtime-variable';
+    }
+  }, true);
+  document.addEventListener('copy', event => {
+    flushEdit('commit');
+    const info = target(event.target);
+    if (!info || info.password || info.forbiddenValue) return;
+    send({ kind: 'extract', target: info, occurredAt: Date.now() });
   }, true);
   document.addEventListener('click', event => {
     flushEdit('commit');
@@ -926,6 +937,7 @@ function actionLabel(
     keyboard: "used keyboard on",
     submit: "submitted",
     focus: "focused",
+    extract: "copied from",
   };
   return `${verb[kind]} ${name}`;
 }
@@ -938,6 +950,8 @@ export class DemonstrationRecorder {
   #nextSequence = 1;
   #localValues = new Map<string, string>();
   #editingActions = new Map<string, RecordedAction>();
+  #lastRuntimeVariableName: string | undefined;
+  #nextRuntimeVariable = 1;
   #passwordEventsExcluded = 0;
   #crossOriginEventsExcluded = 0;
   #bindingErrors: string[] = [];
@@ -1044,6 +1058,8 @@ export class DemonstrationRecorder {
     this.#nextSequence = 1;
     this.#localValues.clear();
     this.#editingActions.clear();
+    this.#lastRuntimeVariableName = undefined;
+    this.#nextRuntimeVariable = 1;
     this.#saveObservation = undefined;
     await Promise.all(
       this.context
@@ -1695,6 +1711,25 @@ export class DemonstrationRecorder {
           },
         })
       : undefined;
+    let outputVariable: string | undefined;
+    if (payload.kind === "extract" && target) {
+      outputVariable = `copied_text_${this.#nextRuntimeVariable++}`;
+      this.#lastRuntimeVariableName = outputVariable;
+      if (
+        !this.#session.variables.some(
+          (variable) => variable.name === outputVariable,
+        )
+      ) {
+        this.#session.variables.push({
+          id: createId("variable"),
+          name: outputVariable,
+          valueType: "string",
+          privacy: "runtime-derived",
+          required: true,
+          description: "Ephemeral content extracted during deterministic run.",
+        });
+      }
+    }
     let workflowValue:
       | { kind: "literal"; value: string; persistence: "workflow" }
       | {
@@ -1708,13 +1743,12 @@ export class DemonstrationRecorder {
       payload.value !== undefined &&
       ["fill", "select"].includes(payload.kind)
     ) {
-      if (
-        payload.valueSource === "runtime-variable" &&
-        payload.runtimeVariableName
-      ) {
+      const runtimeVariableName =
+        payload.runtimeVariableName ?? this.#lastRuntimeVariableName;
+      if (payload.valueSource === "runtime-variable" && runtimeVariableName) {
         workflowValue = {
           kind: "runtime-variable",
-          name: payload.runtimeVariableName,
+          name: runtimeVariableName,
           persistence: "memory-only",
         };
       } else {
@@ -1775,6 +1809,7 @@ export class DemonstrationRecorder {
       ...(target ? { target } : {}),
       ...(sequenceContext ? { sequenceContext } : {}),
       ...(workflowValue ? { value: workflowValue } : {}),
+      ...(outputVariable ? { outputVariable } : {}),
       ...(payload.editingTransaction
         ? {
             editingTransaction: {
@@ -1899,6 +1934,7 @@ export class DemonstrationRecorder {
           "uncheck",
           "keyboard",
           "submit",
+          "extract",
         ].includes(action.action),
       )?.id;
     if (event.type === "page-open" && event.context.role === "popup") {

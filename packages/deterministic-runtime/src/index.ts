@@ -422,9 +422,28 @@ export class DeterministicRuntime {
       (context) => context.role === "main",
     );
     if (requiredMain && !this.#pages.resolved.has(requiredMain.id)) {
-      throw new Error(
-        `Main application page is not at expected canonical location ${requiredMain.origin}${requiredMain.pathname}.`,
-      );
+      const firstMainTarget = this.#workflow.steps.find(
+        (step) => step.target?.frame.role === "main",
+      )?.target?.frame;
+      const historicalStart = firstMainTarget
+        ? openPages.find((page) => {
+            try {
+              const canonical = canonicalizeUrl(page.url());
+              return (
+                canonical.origin === firstMainTarget.origin &&
+                canonical.pathname === firstMainTarget.pathname
+              );
+            } catch {
+              return false;
+            }
+          })
+        : undefined;
+      if (historicalStart)
+        this.#pages.resolved.set(requiredMain.id, historicalStart);
+      else
+        throw new Error(
+          `Main application page is not at the demonstrated start location.`,
+        );
     }
   }
 
@@ -763,7 +782,12 @@ export class DeterministicRuntime {
       popupPromise = opener.waitForEvent("popup", { timeout: this.#timeout });
     }
     let usedInputStrategy: string | undefined;
-    if (step.action === "click")
+    if (step.action === "extract") {
+      if (!step.outputVariable)
+        throw new Error("Extract step is missing its ephemeral output.");
+      const value = await this.#readEditableValue(locator);
+      this.#ephemeralValues.set(step.outputVariable, value);
+    } else if (step.action === "click")
       await locator.click({ timeout: this.#timeout });
     else if (step.action === "double-click")
       await locator.dblclick({ timeout: this.#timeout });

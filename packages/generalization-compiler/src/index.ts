@@ -125,6 +125,7 @@ export type AiPayload = {
         fingerprint: string;
       };
       valueRef?: string;
+      outputVariable?: string;
     }>;
   };
   intentionalValues: Record<string, string>;
@@ -249,6 +250,9 @@ export function buildAiPayload(
             }
           : {}),
         ...(action.valueRef ? { valueRef: action.valueRef } : {}),
+        ...(action.outputVariable
+          ? { outputVariable: action.outputVariable }
+          : {}),
       })),
     },
     intentionalValues: valuesForAiInstruction(session.variables, values),
@@ -488,10 +492,8 @@ async function compileSteps(
           pathname: action.target.frame.pathname,
         },
       );
-      const recordedPage = graph.page(action.pageContextId);
-      const useCapturedClosedPage =
-        !liveResolution.root && recordedPage?.isClosed();
-      candidates = useCapturedClosedPage
+      const useCapturedTarget = !liveResolution.root;
+      candidates = useCapturedTarget
         ? validateCapturedLocatorCandidates(action.target, generatedCandidates)
         : liveResolution.root
           ? await validateLocatorCandidates(
@@ -567,6 +569,9 @@ async function compileSteps(
       locatorCandidates: candidates,
       ...(selectedLocatorId ? { selectedLocatorId } : {}),
       ...(action.value ? { value: action.value } : {}),
+      ...(action.outputVariable
+        ? { outputVariable: action.outputVariable }
+        : {}),
       ...(action.valueRef && !localLiteral
         ? { valueRef: action.valueRef }
         : {}),
@@ -721,6 +726,10 @@ function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
       lines.push(`  await ${generatedLocator(selected)}.fill(${generatedValue});`);
     } else if (step.action === "click" && selected) {
       lines.push(`  await ${generatedLocator(selected)}.click();`);
+    } else if (step.action === "extract" && selected) {
+      lines.push(
+        `  variables.${step.outputVariable ?? "copied_text"} = await ${generatedLocator(selected)}.evaluate(element => 'value' in element ? element.value : element.textContent ?? '');`,
+      );
     } else if (step.action === "select" && selected) {
       const generatedValue =
         step.value?.kind === "literal"
@@ -775,6 +784,7 @@ export async function compileDemonstration({
           "uncheck",
           "keyboard",
           "submit",
+          "extract",
         ].includes(action.action),
     );
     if (!hasExecutableAction)

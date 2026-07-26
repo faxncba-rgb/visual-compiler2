@@ -2,13 +2,14 @@
 
 ## Current milestone
 
-Milestone 15.4 — deterministic input strategies and verification.
+Milestone 15.5 — explicit copy/paste dataflow.
 
 ## Milestone objective
 
-- Compile an explicit ordered input-strategy list for every demonstrated edit.
-- Verify the visible value and any legacy backing field before the next action.
-- Fail before Enregistrer if every bounded input strategy fails.
+- Record a copy gesture as `extract` from a demonstrated source locator.
+- Bind the next paste edit to an ephemeral memory-only runtime variable.
+- Replay cross-page transfer without using the OS clipboard as runtime data
+  transport or persisting copied content.
 
 ## Milestone 15.1 finding
 
@@ -93,6 +94,30 @@ Milestone 15.4 — deterministic input strategies and verification.
 - Native setter is deliberately the final Lab fallback and does not claim
   compatibility with closed-shadow or cross-origin editors.
 - Explicit copy/paste dataflow is next.
+
+## Milestone 15.5 implementation
+
+- Added `extract` actions and `runtime-derived` variable declarations to the
+  IR, plus memory-only value references for paste targets.
+- Runtime now reads the live source into an internal map and resolves the
+  destination fill from that map; telemetry exposes no copied content.
+- Added historical-path compilation support for targets recorded before a
+  same-page navigation, while runtime starts at the first demonstrated path.
+- Added local source/destination fixtures and a cross-page copy/paste E2E.
+
+## Milestone 15.5 validation
+
+- TypeScript build: passed.
+- Cross-page extract → navigation → memory-only fill E2E: passed.
+- Demonstration IR, compiled artifact, generated outline and telemetry were
+  asserted not to contain the synthetic copied content; runtime counters stayed
+  at zero.
+
+## Remaining after Milestone 15.5
+
+- Copy/paste recognition depends on observable browser copy/paste events; sites
+  that fully virtualize these gestures without DOM events remain unsupported.
+- The minimal immutable Workflow Library is next.
 
 ## Completed
 
