@@ -2,15 +2,13 @@
 
 ## Current milestone
 
-Milestone 15.3 — live page, frame and popup reacquisition.
+Milestone 15.4 — deterministic input strategies and verification.
 
 ## Milestone objective
 
-- Instrument frames attached after Teaching starts.
-- Reacquire a detached/replaced frame by canonical origin/path plus semantic
-  name/title identity.
-- Reject absent or ambiguous live frame contexts instead of silently using the
-  first match.
+- Compile an explicit ordered input-strategy list for every demonstrated edit.
+- Verify the visible value and any legacy backing field before the next action.
+- Fail before Enregistrer if every bounded input strategy fails.
 
 ## Milestone 15.1 finding
 
@@ -69,6 +67,32 @@ Milestone 15.3 — live page, frame and popup reacquisition.
   known canonical identities; cross-origin internals intentionally remain
   opaque.
 - Deterministic input strategy fallback and value verification are next.
+
+## Milestone 15.4 implementation
+
+- Compiled standard fill, contenteditable fill, sequential keys, legacy backing
+  synchronization and final native-setter fallback in a deterministic order.
+- Added mandatory post-entry checks for input/textarea/select values,
+  contenteditable text and legacy backing controls.
+- Added post-action checkbox/radio state verification.
+- Added a keyboard-dependent synthetic editor and a rejecting editor fixture;
+  failed verification aborts the run before the save click.
+- Included persisted workflow literals in diagnostic redaction inputs without
+  removing them from the executable workflow artifact.
+
+## Milestone 15.4 validation
+
+- TypeScript build: passed.
+- Contenteditable, legacy facade, keyboard-dependent and rejecting-editor E2E:
+  4/4 passed.
+- Rejecting-editor telemetry is FAILED in the value-verification phase and its
+  save counter remains zero.
+
+## Remaining after Milestone 15.4
+
+- Native setter is deliberately the final Lab fallback and does not claim
+  compatibility with closed-shadow or cross-origin editors.
+- Explicit copy/paste dataflow is next.
 
 ## Completed
 

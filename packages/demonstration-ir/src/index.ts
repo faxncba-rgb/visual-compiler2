@@ -459,6 +459,18 @@ export const CompiledStepSchema = z.object({
   value: WorkflowActionValueSchema.optional(),
   valueRef: z.string().optional(),
   localLiteral: z.string().optional(),
+  inputStrategies: z
+    .array(
+      z.enum([
+        "playwright-fill",
+        "contenteditable-fill",
+        "sequential-keys",
+        "legacy-backing-sync",
+        "native-value-setter",
+      ]),
+    )
+    .min(1)
+    .optional(),
   key: z.string().optional(),
   optional: z.boolean(),
   preconditions: z.array(ConditionSchema),

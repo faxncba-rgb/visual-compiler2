@@ -429,6 +429,34 @@ function compileOutcome(
   };
 }
 
+function inputStrategiesFor(action: DemonstrationSession["actions"][number]) {
+  if (!["fill", "select"].includes(action.action)) return undefined;
+  if (action.action === "select") return ["playwright-fill"] as const;
+  switch (action.target?.editorAdapter) {
+    case "keyboard":
+      return ["sequential-keys", "native-value-setter"] as const;
+    case "legacy-facade":
+      return [
+        "contenteditable-fill",
+        "legacy-backing-sync",
+        "sequential-keys",
+        "native-value-setter",
+      ] as const;
+    case "contenteditable":
+      return [
+        "contenteditable-fill",
+        "sequential-keys",
+        "native-value-setter",
+      ] as const;
+    default:
+      return [
+        "playwright-fill",
+        "sequential-keys",
+        "native-value-setter",
+      ] as const;
+  }
+}
+
 async function compileSteps(
   session: DemonstrationSession,
   graph: PageContextGraph,
@@ -543,6 +571,9 @@ async function compileSteps(
         ? { valueRef: action.valueRef }
         : {}),
       ...(localLiteral !== undefined ? { localLiteral } : {}),
+      ...(inputStrategiesFor(action)
+        ? { inputStrategies: [...inputStrategiesFor(action)!] }
+        : {}),
       ...(action.key ? { key: action.key } : {}),
       optional: action.optional,
       preconditions,

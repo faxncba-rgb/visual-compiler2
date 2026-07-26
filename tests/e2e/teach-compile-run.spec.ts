@@ -373,6 +373,78 @@ test.describe("editor strategies", () => {
     });
   }
 
+  test("keyboard-dependent editor compiles sequential keys and verifies the value", async () => {
+    await withManagedBrowser(
+      `${fixtureOrigin}/fixture?variant=A&editor=keyboard`,
+      async ({ browser, page, recorder }) => {
+        const value = "Synthetic keyboard-dependent value";
+        await recorder.start();
+        const field = page.getByLabel("Texte de consultation");
+        await field.click();
+        await field.pressSequentially(value);
+        await page.getByText("Enregistrer", { exact: true }).click();
+        await page.getByText("Consultation synthétique enregistrée.").waitFor();
+        const session = await recorder.stop();
+        const workflow = await compilePrimary({
+          browser,
+          session,
+          values: recorder.localValues,
+        });
+        expect(
+          workflow.steps.find((step) => step.action === "fill")
+            ?.inputStrategies,
+        ).toEqual(["sequential-keys", "native-value-setter"]);
+
+        await browser.navigate(
+          `${fixtureOrigin}/fixture?variant=B&editor=keyboard`,
+        );
+        const telemetry = await new DeterministicRuntime({
+          context: browser.context,
+          workflow,
+          variables: {},
+          mode: "local",
+        }).run();
+        expect(telemetry.state, telemetry.error).toBe("Passed");
+        expect(
+          telemetry.steps.find((step) => step.action === "fill")?.message,
+        ).toContain("sequential-keys");
+        await expect(
+          page.locator("[data-vc-consultation-history] > li"),
+        ).toContainText(value);
+      },
+    );
+  });
+
+  test("failed value verification stops before Enregistrer", async () => {
+    await withManagedBrowser(
+      `${fixtureOrigin}/fixture?variant=A&editor=textarea`,
+      async ({ browser, page, recorder }) => {
+        const { session } = await teachPrimaryWorkflow({
+          page,
+          recorder,
+          value: "Synthetic value that must be verified",
+        });
+        const workflow = await compilePrimary({
+          browser,
+          session,
+          values: recorder.localValues,
+        });
+        await browser.navigate(
+          `${fixtureOrigin}/fixture?variant=B&editor=textarea&rejectInput=1`,
+        );
+        const telemetry = await new DeterministicRuntime({
+          context: browser.context,
+          workflow,
+          variables: {},
+          mode: "local",
+        }).run();
+        expect(telemetry.state).toBe("Failed");
+        expect(telemetry.error).toContain("value-verification phase");
+        await expect(page.locator("[data-vc-save-count]")).toHaveText("0");
+      },
+    );
+  });
+
   test("same-origin iframe editor replays while cross-origin frame content stays excluded", async () => {
     await withManagedBrowser(
       `${fixtureOrigin}/fixture?variant=A&editor=iframe`,

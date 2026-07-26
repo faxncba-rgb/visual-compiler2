@@ -52,6 +52,11 @@ function consultationEditor(mode: string) {
         data-vc-field="consultation" data-vc-editor="legacy-facade" data-vc-backing="[name=consultation_backing]"></div>
       <input type="hidden" name="consultation_backing" value="">`;
   }
+  if (mode === "keyboard") {
+    return `<label for="${id}">Texte de consultation</label>
+      <textarea id="${id}" name="consultation" data-vc-field="consultation"
+        data-vc-editor="keyboard" data-vc-keyboard-dependent="true"></textarea>`;
+  }
   return `<label for="${id}">Texte de consultation</label>
     <textarea id="${id}" name="consultation" data-vc-field="consultation" data-vc-editor="textarea"></textarea>`;
 }
@@ -95,6 +100,7 @@ export function renderFixture(url: URL) {
   const editor = url.searchParams.get("editor") ?? "iframe";
   const shouldFail = url.searchParams.get("fail") === "1";
   const suppressHistory = url.searchParams.get("noHistory") === "1";
+  const rejectInput = url.searchParams.get("rejectInput") === "1";
   const first = variant === "A" ? identitySection() : readonlySection();
   const second = variant === "A" ? readonlySection() : identitySection();
   return `<!doctype html>
@@ -131,6 +137,7 @@ export function renderFixture(url: URL) {
   <script>
     const shouldFail = ${JSON.stringify(shouldFail)};
     const suppressHistory = ${JSON.stringify(suppressHistory)};
+    const rejectInput = ${JSON.stringify(rejectInput)};
     let saves = 0;
     function consultationValue() {
       const frame = document.querySelector('[data-vc-field="consultation-frame"]');
@@ -179,8 +186,25 @@ export function renderFixture(url: URL) {
       if (!popup) window.__validationDone(false);
       return false;
     };
+    document.addEventListener('keydown', event => {
+      if (event.target?.dataset?.vcKeyboardDependent === 'true') {
+        event.target.dataset.vcKeyboardAccepted = 'true';
+      }
+    }, true);
     document.addEventListener('input', event => {
       const target = event.target;
+      if (
+        target?.matches?.('[data-vc-field="consultation"]') &&
+        (rejectInput ||
+          (target.dataset?.vcKeyboardDependent === 'true' &&
+            target.dataset.vcKeyboardAccepted !== 'true'))
+      ) {
+        if (target.isContentEditable) target.textContent = '';
+        else target.value = '';
+      }
+      if (target?.dataset?.vcKeyboardDependent === 'true') {
+        delete target.dataset.vcKeyboardAccepted;
+      }
       const backingSelector = target?.dataset?.vcBacking;
       if (backingSelector) {
         const backing = document.querySelector(backingSelector);

@@ -528,6 +528,149 @@ export class DeterministicRuntime {
     );
   }
 
+  async #readEditableValue(locator: Locator) {
+    return locator.evaluate((element) => {
+      if (
+        element instanceof HTMLInputElement ||
+        element instanceof HTMLTextAreaElement ||
+        element instanceof HTMLSelectElement
+      )
+        return element.value;
+      return element.textContent ?? "";
+    });
+  }
+
+  async #verifyEnteredValue(
+    locator: Locator,
+    expected: string,
+    requireBacking: boolean,
+  ) {
+    const result = await locator.evaluate(
+      (element, details) => {
+        const visibleValue =
+          element instanceof HTMLInputElement ||
+          element instanceof HTMLTextAreaElement ||
+          element instanceof HTMLSelectElement
+            ? element.value
+            : (element.textContent ?? "");
+        const selector = (element as HTMLElement).dataset.vcBacking;
+        const backing = selector
+          ? element.ownerDocument.querySelector(selector)
+          : undefined;
+        const backingMatches =
+          !details.requireBacking ||
+          (backing instanceof HTMLInputElement ||
+          backing instanceof HTMLTextAreaElement
+            ? backing.value === details.expected
+            : false);
+        return {
+          visibleMatches: visibleValue === details.expected,
+          backingMatches,
+        };
+      },
+      { expected, requireBacking },
+    );
+    if (!result.visibleMatches)
+      throw new Error(
+        "Text entry verification failed: target value did not match.",
+      );
+    if (!result.backingMatches)
+      throw new Error(
+        "Text entry verification failed: legacy backing field did not synchronize.",
+      );
+  }
+
+  async #applyInputStrategy(
+    locator: Locator,
+    value: string,
+    strategy: NonNullable<CompiledStep["inputStrategies"]>[number],
+  ) {
+    if (
+      strategy === "playwright-fill" ||
+      strategy === "contenteditable-fill"
+    ) {
+      await locator.fill(value, { timeout: this.#timeout });
+      return;
+    }
+    if (strategy === "sequential-keys") {
+      await locator.click({ timeout: this.#timeout });
+      await locator.press("ControlOrMeta+A");
+      await locator.press("Backspace");
+      await locator.pressSequentially(value, { delay: 0 });
+      return;
+    }
+    if (strategy === "legacy-backing-sync") {
+      await locator.fill(value, { timeout: this.#timeout });
+      await locator.evaluate((element, nextValue) => {
+        const selector = (element as HTMLElement).dataset.vcBacking;
+        const backing = selector
+          ? element.ownerDocument.querySelector(selector)
+          : undefined;
+        if (
+          backing instanceof HTMLInputElement ||
+          backing instanceof HTMLTextAreaElement
+        ) {
+          backing.value = nextValue;
+          backing.dispatchEvent(new Event("input", { bubbles: true }));
+          backing.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }, value);
+      return;
+    }
+    await locator.evaluate((element, nextValue) => {
+      if (element instanceof HTMLInputElement) {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        setter?.call(element, nextValue);
+      } else if (element instanceof HTMLTextAreaElement) {
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        )?.set;
+        setter?.call(element, nextValue);
+      } else {
+        element.textContent = nextValue;
+      }
+      element.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  }
+
+  async #enterAndVerifyValue(
+    step: CompiledStep,
+    locator: Locator,
+    value: string,
+  ) {
+    if (step.action === "select") {
+      await locator.selectOption(value);
+      if ((await this.#readEditableValue(locator)) !== value)
+        throw new Error(
+          "Selection verification failed: target value did not match.",
+        );
+      return "playwright-fill";
+    }
+    const strategies = step.inputStrategies ?? ["playwright-fill"];
+    for (const strategy of strategies) {
+      try {
+        await this.#applyInputStrategy(locator, value, strategy);
+        await this.#verifyEnteredValue(
+          locator,
+          value,
+          strategy === "legacy-backing-sync" ||
+            Boolean(step.target?.backingFieldSelector),
+        );
+        return strategy;
+      } catch {
+        // The demonstrated value is deliberately omitted from fallback errors.
+      }
+    }
+    throw new Error(
+      "Text entry failed during deterministic input and value-verification phase.",
+    );
+  }
+
   async #runStep(step: CompiledStep): Promise<{
     candidate?: LocatorCandidate;
     skipped?: boolean;
@@ -619,37 +762,34 @@ export class DeterministicRuntime {
         "mainFrame" in root ? (root as Page) : (root as Frame).page();
       popupPromise = opener.waitForEvent("popup", { timeout: this.#timeout });
     }
+    let usedInputStrategy: string | undefined;
     if (step.action === "click")
       await locator.click({ timeout: this.#timeout });
     else if (step.action === "double-click")
       await locator.dblclick({ timeout: this.#timeout });
     else if (step.action === "fill") {
       const value = this.#resolveStepValue(step);
-      await locator.fill(value ?? "", { timeout: this.#timeout });
-      await locator.evaluate((element) => {
-        element.dispatchEvent(new Event("input", { bubbles: true }));
-        element.dispatchEvent(new Event("change", { bubbles: true }));
-        element.dispatchEvent(new Event("blur", { bubbles: true }));
-        const html = element as HTMLElement;
-        const selector = html.dataset.vcBacking;
-        if (selector) {
-          const backing = element.ownerDocument.querySelector(selector);
-          if (backing instanceof HTMLInputElement) {
-            backing.value =
-              element instanceof HTMLInputElement ||
-              element instanceof HTMLTextAreaElement
-                ? element.value
-                : (element.textContent ?? "");
-            backing.dispatchEvent(new Event("input", { bubbles: true }));
-            backing.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-        }
-      });
+      usedInputStrategy = await this.#enterAndVerifyValue(
+        step,
+        locator,
+        value ?? "",
+      );
     } else if (step.action === "select") {
       const value = this.#resolveStepValue(step);
-      await locator.selectOption(value ?? "");
-    } else if (step.action === "check") await locator.check();
-    else if (step.action === "uncheck") await locator.uncheck();
+      usedInputStrategy = await this.#enterAndVerifyValue(
+        step,
+        locator,
+        value ?? "",
+      );
+    } else if (step.action === "check") {
+      await locator.check();
+      if (!(await locator.isChecked()))
+        throw new Error("Toggle verification failed after check.");
+    } else if (step.action === "uncheck") {
+      await locator.uncheck();
+      if (await locator.isChecked())
+        throw new Error("Toggle verification failed after uncheck.");
+    }
     else if (step.action === "keyboard")
       await locator.press(step.key ?? "Enter");
     else if (step.action === "submit") {
@@ -690,7 +830,7 @@ export class DeterministicRuntime {
     await this.options.animation?.afterStep?.({ step, locator });
     return {
       candidate,
-      message: `Executed ${step.action} with ${candidate.strategy}.`,
+      message: `Executed ${step.action} with ${usedInputStrategy ?? candidate.strategy}.`,
     };
   }
 

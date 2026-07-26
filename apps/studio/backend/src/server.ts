@@ -707,6 +707,9 @@ export class StudioController {
   ) {
     const sensitiveValues = [
       ...Object.values(this.localValues).map(String),
+      ...(this.workflow?.steps.flatMap((step) =>
+        step.value?.kind === "literal" ? [step.value.value] : [],
+      ) ?? []),
       this.generalizationInstruction,
     ];
     const structuralEvidence = findLocatorValidationEvidence(error);
