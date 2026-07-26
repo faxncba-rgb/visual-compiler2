@@ -159,6 +159,7 @@ export function session(): DemonstrationSession {
         required: true,
       },
     ],
+    outcomeCandidates: [],
     authenticationExcluded: true,
   };
 }

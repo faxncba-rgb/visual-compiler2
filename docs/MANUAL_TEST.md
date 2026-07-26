@@ -9,7 +9,10 @@
    history row was added, Date/Heure remain unchanged, and a fresh consultation
    editor is visible; then stop. The fixture deliberately places
    **Enregistrer** in a `<span>` nested inside the actionable link.
-6. Review the timeline and confirm the text is a local variable.
+6. Review the timeline and confirm the text is a local variable. In
+   **Application success evidence**, confirm **Consultation history increased
+   by one — recommended** is selected and required; popup completion, canonical
+   page return, Date and Heure invariants should also be selected.
 7. Compile with no generalization instruction. Confirm mode
    `direct-demonstration`. Confirm the save step records `tag=a`, `role=link`,
    static name `Enregistrer`, raw-target promotion, and the preceding fill
@@ -17,13 +20,31 @@
    locator.
 8. Choose **Run locally** without navigation or re-teaching. Confirm the save
    count increased by exactly one.
-9. Confirm Passed, the consultation editor received the local value, Date/Heure
-   are unchanged, the popup closed, and both runtime counters are zero.
-10. Choose **Reset synthetic fixture** and confirm the history/save count return
+9. Confirm Passed, the consultation editor was reset, Date/Heure are unchanged,
+   the popup closed, history increased relative to its pre-run count, and both
+   runtime counters are zero.
+10. Choose **Run again** without resetting. Confirm a further history row is
+    added from a fresh baseline and Enregistrer activates exactly once more.
+11. Choose **Reset synthetic fixture** and confirm the history/save count return
     to their initial values while the compiled workflow and Run again remain.
-11. Switch the target to variant B, choose Run again, and repeat the checks.
-12. Re-record the popup-centric fixture and verify an action in the popup,
+12. Switch the target to variant B, choose Run again, and repeat the checks.
+13. Re-record the popup-centric fixture and verify an action in the popup,
     closure, opener focus, and main success.
+
+## Application outcome rejection
+
+1. Teach only a consultation fill without choosing **Enregistrer**. Stop and
+   confirm the review explains that scoped history did not increase and Compile
+   is disabled.
+2. Teach the valid workflow, compile it, then run on
+   `?variant=B&noHistory=1`. Confirm the popup closes but Studio reports Failed
+   because the relative history increment is missing.
+3. Click Enregistrer and immediately stop teaching without waiting for the
+   popup. Confirm bounded final reconciliation still observes popup closure,
+   frame replacement, editor reset and the new history row.
+4. Confirm `application-outcome-validation` diagnostics contain only scoped
+   before/after counts, candidate types, lifecycle/stability flags, selected
+   outcome type and rejection reasons.
 
 ## Compile rejection and retry
 
@@ -63,3 +84,7 @@
    restore is enabled.
 5. Restore, leave AI generalization instructions empty, compile, and confirm the
    artifact is ready without re-teaching.
+6. For a legacy stored demonstration, confirm Studio preserves it unchanged. If
+   it lacks `applicationStateBefore`, `applicationStateAfter`,
+   `outcomeCandidates`, or `effectReconciliation`, the review must name the
+   missing structural evidence and require a new teaching run.

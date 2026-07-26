@@ -60,8 +60,8 @@ Open <http://127.0.0.1:3100>. The synthetic DPI runs at
    it. For the bundled fixture, choose **Authentication complete**.
 3. Choose **Start teaching**, edit the consultation field, and select
    **Enregistrer**.
-4. Choose **Stop teaching**, review the timeline and local variables, then
-   **Compile**.
+4. Choose **Stop teaching**, review the timeline, local variables and selected
+   **Application success evidence**, then **Compile**.
 5. Choose either **Run locally** or **1st run — animated**.
 6. Use **Run again** without teaching or compiling again.
 
@@ -80,6 +80,27 @@ same-form and same-container evidence in that order. The demonstrated
 fill-then-save relationship scopes duplicate action names and ambiguous
 unscoped matches still fail closed.
 
+## Stable application outcomes
+
+Stop teaching performs a bounded final reconciliation instead of trusting the
+state immediately after the click. Studio waits for a 500 ms DOM quiet period,
+up to a configurable five-second maximum, then reconciles same-page mutations,
+frame replacement, popup lifecycle and the final Page Context Graph.
+
+For the consultation workflow, the recommended positive outcome is a relative
+scoped postcondition: the consultation-history count must increase by at least
+one. The compiled artifact stores no absolute row count and each Run locally or
+Run again captures a fresh baseline. Popup completion, return to the canonical
+page, editor reset, and unchanged Date/Heure fields are additional required
+evidence. Known application errors still fail before positive evidence can
+produce Passed.
+
+The **Application success evidence** review shows observed and rejected
+candidates before Compile. Evidence can be selected, deselected, made required,
+recaptured from the stable current state, or explicitly accepted as the
+demonstrated current success state. A missing history increment cannot be
+replaced by mere absence of an error.
+
 The managed browser profile is stored only under `browser-profiles/` and is
 Git-ignored. Workflow values live separately under `local-data/` and are also
 Git-ignored.
@@ -96,7 +117,10 @@ authentication state, cookie or token is stored. After a Studio restart:
 3. Choose **Restore last demonstration**, then compile or retry directly.
 
 Restore is disabled and the backend refuses the operation if the synthetic
-profile or live structural fingerprint is incompatible.
+profile or live structural fingerprint is incompatible. Legacy stored sessions
+remain readable; if they predate scoped before/after counts and outcome
+candidates, Studio shows the missing evidence rather than silently weakening
+compilation.
 
 ## Browser and popup handling
 
@@ -124,6 +148,9 @@ candidate counts and per-strategy rejection reasons. **Copy diagnostics**
 copies that same redacted record. The diagnostic is appended to the persistent
 local Studio event log and terminal. Form values, dynamic editor contents,
 query parameters, cookies, tokens and authentication data are excluded.
+Application-outcome failures add only structural before/after counts, candidate
+types, popup/page/reset/stability flags, the selected outcome type, and
+redacted rejection reasons.
 
 ## AI generalization and local variables
 

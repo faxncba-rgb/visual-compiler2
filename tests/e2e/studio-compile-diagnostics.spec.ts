@@ -129,6 +129,57 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       studioOrigin,
       demonstratedValue,
     );
+    await expect(
+      page.getByText("Consultation history increased by one — recommended", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel("Select Consultation history increased by one", {
+        exact: true,
+      }),
+    ).toBeChecked();
+    const requireHistory = page.getByLabel(
+      "Require Consultation history increased by one",
+      { exact: true },
+    );
+    await expect(requireHistory).toBeChecked();
+    await requireHistory.uncheck();
+    await expect
+      .poll(
+        () =>
+          controller.session?.outcomeCandidates.find(
+            (candidate) => candidate.type === "relative-count-increase",
+          )?.required,
+      )
+      .toBe(false);
+    await requireHistory.check();
+    await expect
+      .poll(
+        () =>
+          controller.session?.outcomeCandidates.find(
+            (candidate) => candidate.type === "relative-count-increase",
+          )?.required,
+      )
+      .toBe(true);
+    expect(controller.session?.effectReconciliation).toMatchObject({
+      status: "stable",
+      popupOpened: true,
+      popupClosed: true,
+      frameReplacementObserved: true,
+      pageContextReturned: true,
+      editorResetObserved: true,
+    });
+    expect(controller.session?.outcomeCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "new-item-contains-variable",
+          variableRef: "{{consultation_text}}",
+          observed: true,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(controller.session)).not.toContain(demonstratedValue);
 
     await page.getByRole("button", { name: "Compile", exact: true }).click();
 
@@ -139,6 +190,28 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
     await expect(page.locator("#toast")).not.toHaveClass(/error/);
     await expect(page.locator("#compilationDiagnostics")).toBeHidden();
     expect(controller.workflow?.compileMode).toBe("direct-demonstration");
+    expect(controller.workflow?.expectedOutcome.positiveEvidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "relative-count-increase",
+          target: "[data-vc-consultation-history] > li",
+          expected: 1,
+          required: true,
+        }),
+        expect.objectContaining({ type: "popup-closed", required: true }),
+        expect.objectContaining({ type: "navigation", required: true }),
+        expect.objectContaining({
+          type: "field-unchanged",
+          target: '[name="date_consultation"]',
+          required: true,
+        }),
+        expect.objectContaining({
+          type: "field-unchanged",
+          target: '[name="heure_consultation"]',
+          required: true,
+        }),
+      ]),
+    );
     expect(
       controller.workflow?.steps.find((step) => step.action === "fill")?.target
         ?.associatedLabel,
@@ -235,6 +308,16 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
     expect(JSON.stringify(controller.workflow)).not.toContain(
       demonstratedValue,
     );
+    const replayValue = "SYNTHETIC-UPDATED-RUNTIME-VALUE";
+    const localValueInput = page.getByLabel("consultation_text local value", {
+      exact: true,
+    });
+    await localValueInput.fill(replayValue);
+    await localValueInput.blur();
+    await expect
+      .poll(() => controller.localValues.consultation_text)
+      .toBe(replayValue);
+    expect(JSON.stringify(controller.workflow)).not.toContain(replayValue);
 
     const saveCountBeforeRun = Number(
       await controller.browser.mainPage
@@ -249,7 +332,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       controller.browser.mainPage
         .frameLocator('iframe[title="Éditeur de consultation"]')
         .getByLabel("Texte de consultation", { exact: true }),
-    ).toHaveValue(demonstratedValue);
+    ).toHaveValue("");
     await expect(
       controller.browser.mainPage.locator('[name="date_consultation"]'),
     ).toHaveValue(initialSchedule.date);
@@ -264,11 +347,32 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
         "[data-vc-consultation-history] > li",
       ),
     ).toHaveCount(2);
+    await expect(
+      controller.browser.mainPage
+        .locator("[data-vc-consultation-history] > li")
+        .last(),
+    ).toContainText(replayValue);
     expect(controller.telemetry).toMatchObject({
       state: "Passed",
       llmCalls: 0,
       openAIRequests: 0,
     });
+    await page.getByRole("button", { name: "Run again", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("PASSED");
+    await expect(
+      controller.browser.mainPage.locator(
+        "[data-vc-consultation-history] > li",
+      ),
+    ).toHaveCount(3);
+    await expect(
+      controller.browser.mainPage.locator("[data-vc-save-count]"),
+    ).toHaveText(String(saveCountBeforeRun + 2));
+    await expect(
+      controller.browser.mainPage.locator('[name="date_consultation"]'),
+    ).toHaveValue(initialSchedule.date);
+    await expect(
+      controller.browser.mainPage.locator('[name="heure_consultation"]'),
+    ).toHaveValue(initialSchedule.time);
 
     await page
       .getByRole("button", {
@@ -285,6 +389,163 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
     await expect(
       page.getByRole("button", { name: "Run again", exact: true }),
     ).toBeEnabled();
+  });
+});
+
+test("fill without Enregistrer exposes missing positive evidence before compile", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await page.goto(studioOrigin);
+    await page
+      .getByRole("button", { name: "Open managed browser", exact: true })
+      .click();
+    await page
+      .getByRole("button", {
+        name: "Authentication complete · ready",
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole("button", { name: "Start teaching", exact: true })
+      .click();
+    const editor = controller.browser.mainPage
+      .frameLocator('iframe[title="Éditeur de consultation"]')
+      .getByLabel("Texte de consultation", { exact: true });
+    await editor.fill("SYNTHETIC-NO-SAVE-OUTCOME");
+    await controller.browser.mainPage.waitForTimeout(380);
+    await page
+      .getByRole("button", { name: "Stop teaching", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "DEMONSTRATION_REVIEW",
+    );
+    await expect(
+      page.getByText("Scoped consultation-history count did not increase.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Compile", exact: true }),
+    ).toBeDisabled();
+    const response = await page.evaluate(async () => {
+      const result = await fetch("/api/compile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instruction: "" }),
+      });
+      return { status: result.status, body: await result.json() };
+    });
+    expect(response.status).toBe(422);
+    expect(response.body.diagnostic).toMatchObject({
+      compilerStage: "application-outcome-validation",
+      applicationOutcomeEvidence: {
+        reconciliationStatus: "legacy-insufficient",
+        popupLifecycleObserved: false,
+        pageContextReturned: false,
+        editorResetObserved: false,
+      },
+    });
+    expect(
+      response.body.diagnostic.applicationOutcomeEvidence,
+    ).not.toHaveProperty("selectedPositiveOutcome");
+    expect(JSON.stringify(response.body)).not.toContain(
+      "SYNTHETIC-NO-SAVE-OUTCOME",
+    );
+  });
+});
+
+test("popup completion without a relative history increment fails Run locally", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await teachLegacyLayoutA(
+      page,
+      controller,
+      studioOrigin,
+      "SYNTHETIC-RUNTIME-HISTORY-GUARD",
+    );
+    await page.getByRole("button", { name: "Compile", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+    await controller.browser.navigate(
+      "http://127.0.0.1:4273/fixture?variant=B&noHistory=1",
+    );
+    await page
+      .getByRole("button", { name: "Run locally", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText("FAILED");
+    await expect(
+      controller.browser.mainPage.locator("[data-vc-save-count]"),
+    ).toHaveText("1");
+    await expect(
+      controller.browser.mainPage.locator(
+        "[data-vc-consultation-history] > li",
+      ),
+    ).toHaveCount(0);
+    expect(
+      controller.browser.context
+        .pages()
+        .filter((candidate) => !candidate.isClosed()),
+    ).toEqual([controller.browser.mainPage]);
+    expect(controller.telemetry).toMatchObject({
+      state: "Failed",
+      llmCalls: 0,
+      openAIRequests: 0,
+    });
+    expect(controller.telemetry?.error).toContain(
+      "Required positive outcome missing: relative-count-increase",
+    );
+  });
+});
+
+test("Stop teaching reconciles popup, rerender and history effects that arrive after the click", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await page.goto(studioOrigin);
+    await page
+      .getByRole("button", { name: "Open managed browser", exact: true })
+      .click();
+    await page
+      .getByRole("button", {
+        name: "Authentication complete · ready",
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole("button", { name: "Start teaching", exact: true })
+      .click();
+    const editor = controller.browser.mainPage
+      .frameLocator('iframe[title="Éditeur de consultation"]')
+      .getByLabel("Texte de consultation", { exact: true });
+    await editor.fill("SYNTHETIC-LATE-OUTCOME");
+    await controller.browser.mainPage.waitForTimeout(380);
+    await controller.browser.mainPage
+      .getByText("Enregistrer", { exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Stop teaching", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "DEMONSTRATION_REVIEW",
+    );
+    expect(controller.session?.applicationStateAfter?.historyCount).toBe(1);
+    expect(controller.session?.effectReconciliation).toMatchObject({
+      status: "stable",
+      popupOpened: true,
+      popupClosed: true,
+      frameReplacementObserved: true,
+      editorResetObserved: true,
+    });
+    expect(controller.session?.outcomeCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "relative-count-increase",
+          observed: true,
+          selected: true,
+        }),
+      ]),
+    );
   });
 });
 
@@ -406,6 +667,11 @@ test("the last completed synthetic demonstration restores after a Studio restart
         /cookie|token|authorization|authenticationState/i,
       );
       expect(variablesText).toContain(demonstratedValue);
+      expect(controller.snapshot().lastDemonstration).toMatchObject({
+        available: true,
+        outcomeEvidenceCompatible: true,
+        missingOutcomeFields: [],
+      });
       await controller.browser.close();
 
       const incompatibleController = new StudioController(rootDirectory);

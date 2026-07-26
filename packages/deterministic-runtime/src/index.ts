@@ -202,6 +202,7 @@ export class DeterministicRuntime {
     | { type: string; response: "accepted" | "dismissed" }
     | undefined;
   #dialogCursor = 0;
+  readonly #outcomeBaselines = new Map<string, string | number>();
   #routeInstalled = false;
   #networkHandler: ((route: Route) => Promise<void>) | undefined;
   #dialogHandler: ((dialog: Dialog) => Promise<void>) | undefined;
@@ -223,6 +224,7 @@ export class DeterministicRuntime {
     await this.#installNetworkGuard();
     try {
       await this.#resolveInitialContexts();
+      await this.#captureOutcomeBaselines();
       for (const step of this.#workflow.steps) {
         throwIfStopped(this.options.signal);
         const started = Date.now();
@@ -393,7 +395,14 @@ export class DeterministicRuntime {
 
   async #resolveContext(step: CompiledStep): Promise<LocatorRoot> {
     const already = this.#pages.resolved.get(step.pageContextId);
-    if (already) return already;
+    if (already) {
+      const stillAvailable =
+        "isDetached" in already
+          ? !(already as Frame).isDetached()
+          : !(already as Page).isClosed();
+      if (stillAvailable) return already;
+      this.#pages.resolved.delete(step.pageContextId);
+    }
     const pageContext = this.#workflow.pageContexts.find(
       (candidate) => candidate.id === step.pageContextId,
     );
@@ -666,6 +675,63 @@ export class DeterministicRuntime {
     }
   }
 
+  #outcomeBaselineKey(type: string, target: string) {
+    return `${type}:${target}`;
+  }
+
+  async #captureOutcomeBaselines() {
+    const mainContext = this.#workflow.pageContexts.find(
+      (candidate) => candidate.role === "main",
+    );
+    const mainPage = mainContext
+      ? (this.#pages.resolved.get(mainContext.id) as Page | undefined)
+      : undefined;
+    if (!mainPage || mainPage.isClosed()) return;
+    for (const evidence of this.#workflow.expectedOutcome.positiveEvidence) {
+      const key = this.#outcomeBaselineKey(evidence.type, evidence.target);
+      if (
+        evidence.type === "relative-count-increase" ||
+        evidence.type === "new-item-contains-variable"
+      ) {
+        this.#outcomeBaselines.set(
+          key,
+          await mainPage.locator(evidence.target).count(),
+        );
+      } else if (evidence.type === "field-unchanged") {
+        this.#outcomeBaselines.set(
+          key,
+          await mainPage.locator(evidence.target).inputValue(),
+        );
+      }
+    }
+  }
+
+  async #editorResetObserved(sourceStepId: string | undefined) {
+    if (!sourceStepId) return false;
+    const sourceStep = this.#workflow.steps.find(
+      (step) => step.id === sourceStepId,
+    );
+    if (!sourceStep?.target) return false;
+    this.#pages.resolved.delete(sourceStep.pageContextId);
+    const root = await this.#resolveContext(sourceStep).catch(() => undefined);
+    if (!root) return false;
+    for (const candidate of selectedFirst(sourceStep)) {
+      const locator = locatorForRule(root, candidate.rule);
+      if ((await locator.count().catch(() => 0)) !== 1) continue;
+      return locator
+        .evaluate((element) => {
+          const value =
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLTextAreaElement
+              ? element.value
+              : (element.textContent ?? "");
+          return value.trim() === "";
+        })
+        .catch(() => false);
+    }
+    return false;
+  }
+
   async #verifyOutcome() {
     const checks: RuntimeTelemetry["outcomeChecks"] = [];
     const mainContext = this.#workflow.pageContexts.find(
@@ -702,7 +768,7 @@ export class DeterministicRuntime {
     }
 
     for (const evidence of this.#workflow.expectedOutcome.positiveEvidence) {
-      let actual: string | boolean = false;
+      let actual: string | number | boolean = false;
       if (evidence.type === "text-visible") {
         const page =
           (this.#pages.resolved.get(evidence.pageContextId) as
@@ -734,8 +800,56 @@ export class DeterministicRuntime {
           .locator(evidence.target)
           .isVisible()
           .catch(() => false);
+      } else if (evidence.type === "relative-count-increase") {
+        const baseline = this.#outcomeBaselines.get(
+          this.#outcomeBaselineKey(evidence.type, evidence.target),
+        );
+        const current = await mainPage.locator(evidence.target).count();
+        actual = current - (typeof baseline === "number" ? baseline : current);
+      } else if (evidence.type === "new-item-contains-variable") {
+        const baseline = this.#outcomeBaselines.get(
+          this.#outcomeBaselineKey(evidence.type, evidence.target),
+        );
+        const start = typeof baseline === "number" ? baseline : 0;
+        const count = await mainPage.locator(evidence.target).count();
+        const expectedValue = evidence.variableRef
+          ? resolveValueReference(
+              evidence.variableRef,
+              undefined,
+              this.#variables,
+            )
+          : undefined;
+        actual = false;
+        for (let index = start; index < count; index += 1) {
+          const matches = await mainPage
+            .locator(evidence.target)
+            .nth(index)
+            .evaluate(
+              (element, value) =>
+                Boolean(value && element.textContent?.includes(value)),
+              expectedValue,
+            )
+            .catch(() => false);
+          if (matches) {
+            actual = true;
+            break;
+          }
+        }
+      } else if (evidence.type === "editor-reset") {
+        actual = await this.#editorResetObserved(evidence.sourceStepId);
+      } else if (evidence.type === "field-unchanged") {
+        const baseline = this.#outcomeBaselines.get(
+          this.#outcomeBaselineKey(evidence.type, evidence.target),
+        );
+        const current = await mainPage.locator(evidence.target).inputValue();
+        actual = typeof baseline === "string" && current === baseline;
       }
-      const passed = actual === evidence.expected;
+      const passed =
+        evidence.type === "relative-count-increase" &&
+        typeof actual === "number" &&
+        typeof evidence.expected === "number"
+          ? actual >= evidence.expected
+          : actual === evidence.expected;
       checks.push({
         type: evidence.type,
         target: evidence.target,

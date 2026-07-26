@@ -42,6 +42,31 @@ export class CompilationStageError extends Error {
   }
 }
 
+export type ApplicationOutcomeValidationEvidence = {
+  beforeScopedElementCount?: number;
+  afterScopedElementCount?: number;
+  candidateOutcomeTypes: string[];
+  popupLifecycleObserved: boolean;
+  pageContextReturned: boolean;
+  editorResetObserved: boolean;
+  reconciliationStatus: string;
+  selectedPositiveOutcome?: string;
+  rejectedCandidates: Array<{
+    type: string;
+    reasons: string[];
+  }>;
+};
+
+export class ApplicationOutcomeValidationError extends Error {
+  readonly name = "ApplicationOutcomeValidationError";
+
+  constructor(readonly evidence: ApplicationOutcomeValidationEvidence) {
+    super(
+      "Compilation requires selected positive success evidence from the stable demonstrated after-state.",
+    );
+  }
+}
+
 function compilationStageError(stage: CompilationStage, error: unknown) {
   return error instanceof CompilationStageError
     ? error
@@ -238,34 +263,164 @@ export function buildAiPayload(
   };
 }
 
-function compileOutcome(session: DemonstrationSession): ApplicationOutcome {
-  const success = session.actions
-    .flatMap((action) => action.observedEffects)
-    .find((effect) => effect.type === "success-visible");
-  if (!success?.pageContextId || !success.description) {
-    throw new Error(
-      "Compilation requires positive success evidence from the demonstrated after-state.",
-    );
-  }
-  return {
-    positiveEvidence: [
-      {
-        type: "text-visible",
-        pageContextId: success.pageContextId,
-        target: success.description,
-        expected: true,
-        required: true,
-      },
-      ...session.actions
-        .filter((action) => action.action === "popup-close")
-        .map((action) => ({
-          type: "popup-closed" as const,
-          pageContextId: action.pageContextId,
-          target: action.pageContextId,
-          expected: true as const,
+function compileOutcome(
+  session: DemonstrationSession,
+  steps: CompiledStep[],
+): ApplicationOutcome {
+  let candidates = session.outcomeCandidates;
+  if (candidates.length === 0) {
+    const legacySuccess = session.actions
+      .flatMap((action) => action.observedEffects)
+      .find((effect) => effect.type === "success-visible");
+    if (legacySuccess?.pageContextId) {
+      candidates = [
+        {
+          id: createId("outcome"),
+          type: "success-marker",
+          label: "Legacy structural success marker",
+          pageContextId: legacySuccess.pageContextId,
+          target: '[data-vc-outcome="success"]',
+          observed: true,
+          confidence: 0.8,
+          recommended: false,
+          selected: true,
           required: true,
-        })),
-    ],
+          rejectionReasons: [],
+        },
+      ];
+    }
+  }
+  const selected = candidates.filter(
+    (candidate) => candidate.selected && candidate.observed,
+  );
+  const evidence: ApplicationOutcomeValidationEvidence = {
+    ...(session.applicationStateBefore?.historyCount !== undefined
+      ? {
+          beforeScopedElementCount: session.applicationStateBefore.historyCount,
+        }
+      : {}),
+    ...(session.applicationStateAfter?.historyCount !== undefined
+      ? { afterScopedElementCount: session.applicationStateAfter.historyCount }
+      : {}),
+    candidateOutcomeTypes: candidates.map((candidate) => candidate.type),
+    popupLifecycleObserved: Boolean(
+      session.effectReconciliation?.popupOpened &&
+        session.effectReconciliation.popupClosed,
+    ),
+    pageContextReturned:
+      session.effectReconciliation?.pageContextReturned ?? false,
+    editorResetObserved:
+      session.effectReconciliation?.editorResetObserved ?? false,
+    reconciliationStatus:
+      session.effectReconciliation?.status ?? "legacy-insufficient",
+    ...(selected[0] ? { selectedPositiveOutcome: selected[0].type } : {}),
+    rejectedCandidates: candidates
+      .filter((candidate) => !candidate.observed)
+      .map((candidate) => ({
+        type: candidate.type,
+        reasons: candidate.rejectionReasons,
+      })),
+  };
+  if (selected.length === 0)
+    throw new ApplicationOutcomeValidationError(evidence);
+  const positiveEvidence: ApplicationOutcome["positiveEvidence"] = [];
+  for (const candidate of selected) {
+    if (
+      candidate.type === "relative-count-increase" ||
+      candidate.type === "new-scoped-item"
+    ) {
+      positiveEvidence.push({
+        type: "relative-count-increase",
+        pageContextId: candidate.pageContextId,
+        target: candidate.target,
+        expected: candidate.minimumIncrease ?? 1,
+        required: candidate.required,
+      });
+      continue;
+    }
+    if (candidate.type === "new-item-contains-variable") {
+      positiveEvidence.push({
+        type: "new-item-contains-variable",
+        pageContextId: candidate.pageContextId,
+        target: candidate.target,
+        expected: true,
+        ...(candidate.variableRef
+          ? { variableRef: candidate.variableRef }
+          : {}),
+        required: candidate.required,
+      });
+      continue;
+    }
+    if (candidate.type === "editor-reset") {
+      const saveAction = candidate.sourceActionId
+        ? session.actions.find(
+            (action) => action.id === candidate.sourceActionId,
+          )
+        : undefined;
+      const fillStep = saveAction?.sequenceContext
+        ? steps.find(
+            (step) =>
+              step.sourceActionId ===
+              saveAction.sequenceContext?.previousActionId,
+          )
+        : undefined;
+      positiveEvidence.push({
+        type: "editor-reset",
+        pageContextId: candidate.pageContextId,
+        target: candidate.target,
+        expected: true,
+        ...(fillStep ? { sourceStepId: fillStep.id } : {}),
+        required: candidate.required,
+      });
+      continue;
+    }
+    if (candidate.type === "popup-lifecycle") {
+      const popupClose = [...session.actions]
+        .reverse()
+        .find((action) => action.action === "popup-close");
+      if (popupClose) {
+        positiveEvidence.push({
+          type: "popup-closed",
+          pageContextId: popupClose.pageContextId,
+          target: popupClose.pageContextId,
+          expected: true,
+          required: candidate.required,
+        });
+      }
+      continue;
+    }
+    if (candidate.type === "returned-to-page") {
+      positiveEvidence.push({
+        type: "navigation",
+        pageContextId: candidate.pageContextId,
+        target: candidate.target,
+        expected: true,
+        required: candidate.required,
+      });
+      continue;
+    }
+    if (candidate.type === "field-unchanged") {
+      positiveEvidence.push({
+        type: "field-unchanged",
+        pageContextId: candidate.pageContextId,
+        target: candidate.target,
+        expected: true,
+        required: candidate.required,
+      });
+      continue;
+    }
+    positiveEvidence.push({
+      type: "element-visible",
+      pageContextId: candidate.pageContextId,
+      target: candidate.target,
+      expected: true,
+      required: candidate.required,
+    });
+  }
+  if (positiveEvidence.length === 0)
+    throw new ApplicationOutcomeValidationError(evidence);
+  return {
+    positiveEvidence,
     negativeEvidence: [
       {
         type: "error-marker",
@@ -608,7 +763,7 @@ export async function compileDemonstration({
   }
   let expectedOutcome: ApplicationOutcome;
   try {
-    expectedOutcome = compileOutcome(session);
+    expectedOutcome = compileOutcome(session, steps);
   } catch (error) {
     throw compilationStageError("application-outcome-validation", error);
   }

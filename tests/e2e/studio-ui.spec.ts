@@ -32,6 +32,9 @@ test("Studio exposes permanent Lab Mode, privacy boundaries, and both optional r
   await expect(
     page.getByText("AI generalization instructions", { exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByText("Application success evidence", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/Payload sent to AI/)).toBeVisible();
 });
 

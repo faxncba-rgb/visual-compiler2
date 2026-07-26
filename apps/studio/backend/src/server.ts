@@ -10,9 +10,11 @@ import { fileURLToPath } from "node:url";
 import { ManagedBrowser } from "../../../../packages/managed-browser/src";
 import { DemonstrationRecorder } from "../../../../packages/demonstration-recorder/src";
 import {
+  ApplicationOutcomeValidationError,
   buildAiPayload,
   compileDemonstration,
   CompilationStageError,
+  type ApplicationOutcomeValidationEvidence,
   type CompilationStage,
 } from "../../../../packages/generalization-compiler/src";
 import {
@@ -79,6 +81,7 @@ export type StudioCompilationDiagnostic = {
   compilerStage: StudioCompilationStage;
   serverMessage: string;
   structuralEvidence?: LocatorValidationEvidence;
+  applicationOutcomeEvidence?: ApplicationOutcomeValidationEvidence;
 };
 
 class StudioCompilationFailure extends Error {
@@ -100,6 +103,20 @@ function findLocatorValidationEvidence(
   while (current && !visited.has(current)) {
     visited.add(current);
     if (current instanceof LocatorValidationError) return current.evidence;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}
+
+function findApplicationOutcomeValidationEvidence(
+  error: unknown,
+): ApplicationOutcomeValidationEvidence | undefined {
+  let current = error;
+  const visited = new Set<unknown>();
+  while (current && !visited.has(current)) {
+    visited.add(current);
+    if (current instanceof ApplicationOutcomeValidationError)
+      return current.evidence;
     current = current instanceof Error ? current.cause : undefined;
   }
   return undefined;
@@ -217,6 +234,53 @@ export class StudioController {
     }
   }
 
+  #lastDemonstrationOutcomeStatus() {
+    const filename = path.join(
+      this.#lastDemonstrationDirectory(),
+      "session.json",
+    );
+    const requiredFields = [
+      "applicationStateBefore",
+      "applicationStateAfter",
+      "outcomeCandidates",
+      "effectReconciliation",
+    ] as const;
+    if (!existsSync(filename))
+      return {
+        outcomeEvidenceCompatible: false,
+        missingOutcomeFields: [...requiredFields],
+      };
+    try {
+      const session = JSON.parse(readFileSync(filename, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const missingOutcomeFields = requiredFields.filter((field) => {
+        if (!(field in session)) return true;
+        if (field === "outcomeCandidates")
+          return (
+            !Array.isArray(session[field]) ||
+            !(session[field] as unknown[]).some(
+              (candidate) =>
+                candidate &&
+                typeof candidate === "object" &&
+                (candidate as { observed?: unknown }).observed === true,
+            )
+          );
+        return !session[field] || typeof session[field] !== "object";
+      });
+      return {
+        outcomeEvidenceCompatible: missingOutcomeFields.length === 0,
+        missingOutcomeFields,
+      };
+    } catch {
+      return {
+        outcomeEvidenceCompatible: false,
+        missingOutcomeFields: [...requiredFields],
+      };
+    }
+  }
+
   #lastDemonstrationStatus() {
     const metadata = this.#readLastDemonstrationMetadata();
     const directory = this.#lastDemonstrationDirectory();
@@ -242,6 +306,7 @@ export class StudioController {
       available,
       ...(metadata ? { profileId: metadata.profileId } : {}),
       structurallyCompatible,
+      ...this.#lastDemonstrationOutcomeStatus(),
     };
   }
 
@@ -458,6 +523,36 @@ export class StudioController {
     this.session = this.recorder?.session;
   }
 
+  updateOutcomeCandidate(
+    candidateId: string,
+    patch: { selected?: unknown; required?: unknown },
+  ) {
+    if (!this.recorder || !this.session)
+      throw new Error("No demonstration is available.");
+    this.session = this.recorder.updateOutcomeCandidate(candidateId, {
+      ...(typeof patch.selected === "boolean"
+        ? { selected: patch.selected }
+        : {}),
+      ...(typeof patch.required === "boolean"
+        ? { required: patch.required }
+        : {}),
+    });
+  }
+
+  async reconcileOutcome(useCurrentState = false) {
+    if (!this.recorder || !this.session)
+      throw new Error("No demonstration is available.");
+    if (this.machine.state !== "DEMONSTRATION_REVIEW")
+      throw new Error(
+        "Application success evidence can only be reconciled during review.",
+      );
+    this.session = await this.recorder.reconcileCurrentState({
+      useCurrentState,
+    });
+    await this.persistRecoverableState();
+    return this.session;
+  }
+
   previewPayload(instruction: unknown) {
     if (!this.session)
       throw new Error("Stop a demonstration before previewing.");
@@ -522,6 +617,8 @@ export class StudioController {
       this.generalizationInstruction,
     ];
     const structuralEvidence = findLocatorValidationEvidence(error);
+    const applicationOutcomeEvidence =
+      findApplicationOutcomeValidationEvidence(error);
     const diagnostic: StudioCompilationDiagnostic = {
       id: createId("compile-diagnostic"),
       occurredAt: new Date().toISOString(),
@@ -534,6 +631,7 @@ export class StudioController {
             : "request-validation",
       serverMessage: safeTelemetryMessage(error, sensitiveValues),
       ...(structuralEvidence ? { structuralEvidence } : {}),
+      ...(applicationOutcomeEvidence ? { applicationOutcomeEvidence } : {}),
     };
     this.compilationDiagnostic = diagnostic;
     this.studioEventLog.push(diagnostic);
@@ -756,6 +854,24 @@ export function createStudioServer(controller = new StudioController()) {
           url.pathname.slice("/api/teaching/actions/".length),
         );
         controller.updateAction(actionId, await readJson(request));
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "PATCH" &&
+        url.pathname.startsWith("/api/teaching/outcomes/")
+      ) {
+        const candidateId = decodeURIComponent(
+          url.pathname.slice("/api/teaching/outcomes/".length),
+        );
+        controller.updateOutcomeCandidate(candidateId, await readJson(request));
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/teaching/reconcile-outcome"
+      ) {
+        const body = await readJson(request);
+        await controller.reconcileOutcome(body.useCurrentState === true);
         return sendJson(response, 200, controller.snapshot());
       }
       if (

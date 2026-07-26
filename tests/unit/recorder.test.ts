@@ -3,6 +3,7 @@ import type { Frame } from "playwright";
 import {
   actionableAncestorIndex,
   deduplicateAction,
+  deriveOutcomeCandidates,
   shouldExcludeFrame,
   variableNameForTarget,
 } from "../../packages/demonstration-recorder/src";
@@ -145,5 +146,112 @@ describe("high-level recorder", () => {
     } as unknown as Frame;
     expect(shouldExcludeFrame(main)).toBe(false);
     expect(shouldExcludeFrame(cross)).toBe(true);
+  });
+
+  it("derives relative, popup, reset and invariant success evidence without a form value", () => {
+    const candidates = deriveOutcomeCandidates({
+      pageContextId: "page-main",
+      sourceActionId: "save-action",
+      before: {
+        pageContextId: "page-main",
+        origin: "http://127.0.0.1:4273",
+        pathname: "/fixture",
+        capturedAt: "2026-07-26T10:00:00.000Z",
+        historySelector: "[data-vc-consultation-history] > li",
+        historyCount: 4,
+        editorPresent: true,
+        editorEmpty: false,
+        successMarkerVisible: false,
+        errorMarkerVisible: false,
+      },
+      after: {
+        pageContextId: "page-main",
+        origin: "http://127.0.0.1:4273",
+        pathname: "/fixture",
+        capturedAt: "2026-07-26T10:00:01.000Z",
+        historySelector: "[data-vc-consultation-history] > li",
+        historyCount: 5,
+        editorPresent: true,
+        editorEmpty: true,
+        successMarkerVisible: true,
+        errorMarkerVisible: false,
+      },
+      popupOpened: true,
+      popupClosed: true,
+      pageContextReturned: true,
+      editorResetObserved: true,
+      unchangedFieldLabels: ["Date", "Heure"],
+      variableRefsInNewItem: ["{{consultation_text}}"],
+      successMarkerVisible: true,
+    });
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "relative-count-increase",
+          beforeCount: 4,
+          afterCount: 5,
+          minimumIncrease: 1,
+          selected: true,
+          required: true,
+        }),
+        expect.objectContaining({
+          type: "new-item-contains-variable",
+          variableRef: "{{consultation_text}}",
+        }),
+        expect.objectContaining({
+          type: "editor-reset",
+          observed: true,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(candidates)).not.toContain(
+      "SYNTHETIC-LOCAL-CONSULTATION",
+    );
+  });
+
+  it("does not select popup or unchanged-field evidence when scoped history did not increase", () => {
+    const candidates = deriveOutcomeCandidates({
+      pageContextId: "page-main",
+      before: {
+        pageContextId: "page-main",
+        origin: "http://127.0.0.1:4273",
+        pathname: "/fixture",
+        capturedAt: "2026-07-26T10:00:00.000Z",
+        historySelector: "[data-vc-consultation-history] > li",
+        historyCount: 3,
+        editorPresent: true,
+        editorEmpty: false,
+        successMarkerVisible: false,
+        errorMarkerVisible: false,
+      },
+      after: {
+        pageContextId: "page-main",
+        origin: "http://127.0.0.1:4273",
+        pathname: "/fixture",
+        capturedAt: "2026-07-26T10:00:01.000Z",
+        historySelector: "[data-vc-consultation-history] > li",
+        historyCount: 3,
+        editorPresent: true,
+        editorEmpty: true,
+        successMarkerVisible: true,
+        errorMarkerVisible: false,
+      },
+      popupOpened: true,
+      popupClosed: true,
+      pageContextReturned: true,
+      editorResetObserved: true,
+      unchangedFieldLabels: ["Date", "Heure"],
+      variableRefsInNewItem: [],
+      successMarkerVisible: true,
+    });
+    expect(candidates.some((candidate) => candidate.selected)).toBe(false);
+    expect(
+      candidates.find(
+        (candidate) => candidate.type === "relative-count-increase",
+      ),
+    ).toMatchObject({
+      observed: false,
+      rejectionReasons: ["Scoped consultation-history count did not increase."],
+    });
   });
 });

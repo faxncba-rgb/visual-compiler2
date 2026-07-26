@@ -50,7 +50,15 @@ test("records and replays an action inside a popup, closure, and return to opene
             pageContextId: expect.stringMatching(/^page-/),
           }),
           expect.objectContaining({ action: "popup-close" }),
-          expect.objectContaining({ action: "assert" }),
+        ]),
+      );
+      expect(session.outcomeCandidates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "success-marker",
+            observed: true,
+            selected: true,
+          }),
         ]),
       );
       const popupNode = session.pages.find((node) => node.role === "popup");

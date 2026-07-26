@@ -209,6 +209,91 @@ function renderVariables(variables = [], values = {}) {
   }
 }
 
+async function patchOutcome(candidateId, patch) {
+  try {
+    state = await api(
+      `/api/teaching/outcomes/${encodeURIComponent(candidateId)}`,
+      {
+        method: "PATCH",
+        body: patch,
+      },
+    );
+    render();
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+function renderOutcomeCandidates(session) {
+  const candidates = session?.outcomeCandidates ?? [];
+  const container = $("#outcomeCandidates");
+  container.replaceChildren();
+  const reconciliation = session?.effectReconciliation;
+  $("#outcomeEvidenceStatus").textContent = !session
+    ? "Complete and stop teaching to reconcile the stable after-state."
+    : reconciliation?.status === "stable"
+      ? `Stable after-state reconciled · ${reconciliation.observedForMs} ms observation · ${reconciliation.mutationCount} late mutations.`
+      : reconciliation?.status === "timed-out"
+        ? "Final reconciliation reached its bounded timeout; inspect the rejected evidence."
+        : "Stored demonstration lacks scoped before/after outcome data. Capture a compatible stable state or re-teach.";
+  if (!candidates.length) {
+    container.append(
+      textElement(
+        "p",
+        "empty",
+        "No positive application evidence is available for compilation.",
+      ),
+    );
+    return;
+  }
+  for (const candidate of candidates) {
+    const row = document.createElement("div");
+    row.className = "outcome-candidate";
+    const selected = document.createElement("input");
+    selected.type = "checkbox";
+    selected.checked = candidate.selected;
+    selected.disabled = !candidate.observed;
+    selected.setAttribute("aria-label", `Select ${candidate.label}`);
+    selected.addEventListener(
+      "change",
+      () => void patchOutcome(candidate.id, { selected: selected.checked }),
+    );
+    const required = document.createElement("input");
+    required.type = "checkbox";
+    required.checked = candidate.required;
+    required.disabled = !candidate.selected || !candidate.observed;
+    required.setAttribute("aria-label", `Require ${candidate.label}`);
+    required.addEventListener(
+      "change",
+      () => void patchOutcome(candidate.id, { required: required.checked }),
+    );
+    const copy = document.createElement("div");
+    copy.append(
+      textElement(
+        "strong",
+        "",
+        `${candidate.label}${candidate.recommended ? " — recommended" : ""}`,
+      ),
+      textElement(
+        "span",
+        candidate.observed ? "candidate-observed" : "candidate-rejected",
+        candidate.observed
+          ? `${candidate.type} · confidence ${Math.round(candidate.confidence * 100)}%`
+          : candidate.rejectionReasons.join(" "),
+      ),
+    );
+    const selectedLabel = document.createElement("label");
+    selectedLabel.append(selected, document.createTextNode(" Selected"));
+    const requiredLabel = document.createElement("label");
+    requiredLabel.append(required, document.createTextNode(" Required"));
+    const controls = document.createElement("div");
+    controls.className = "outcome-controls";
+    controls.append(selectedLabel, requiredLabel);
+    row.append(copy, controls);
+    container.append(row);
+  }
+}
+
 function renderLocators(workflow) {
   const container = $("#locatorCards");
   container.replaceChildren();
@@ -258,6 +343,12 @@ function formatCompilationDiagnostic(diagnostic) {
       JSON.stringify(diagnostic.structuralEvidence, null, 2),
     );
   }
+  if (diagnostic.applicationOutcomeEvidence) {
+    lines.push(
+      "Redacted application outcome evidence:",
+      JSON.stringify(diagnostic.applicationOutcomeEvidence, null, 2),
+    );
+  }
   return lines.join("\n");
 }
 
@@ -274,9 +365,17 @@ function renderCompilationDiagnostics(diagnostic) {
   $("#diagnosticHttpStatus").textContent = String(diagnostic.httpStatus);
   $("#diagnosticCompilerStage").textContent = diagnostic.compilerStage;
   $("#diagnosticServerMessage").textContent = diagnostic.serverMessage;
-  $("#diagnosticStructuralEvidence").textContent = diagnostic.structuralEvidence
-    ? JSON.stringify(diagnostic.structuralEvidence, null, 2)
-    : "No locator structural evidence was produced for this failure.";
+  const evidence = {
+    ...(diagnostic.structuralEvidence
+      ? { locator: diagnostic.structuralEvidence }
+      : {}),
+    ...(diagnostic.applicationOutcomeEvidence
+      ? { applicationOutcome: diagnostic.applicationOutcomeEvidence }
+      : {}),
+  };
+  $("#diagnosticStructuralEvidence").textContent = Object.keys(evidence).length
+    ? JSON.stringify(evidence, null, 2)
+    : "No redacted structural evidence was produced for this failure.";
 }
 
 function renderStudioEventLog(events = []) {
@@ -288,6 +387,16 @@ function renderStudioEventLog(events = []) {
 function renderButtons() {
   const current = state?.state ?? "IDLE";
   const hasWorkflow = Boolean(state?.workflow);
+  const hasSelectedPositiveEvidence = Boolean(
+    state?.session?.outcomeCandidates?.some(
+      (candidate) => candidate.observed && candidate.selected,
+    ) ||
+      state?.session?.actions?.some((action) =>
+        action.observedEffects?.some(
+          (effect) => effect.type === "success-visible",
+        ),
+      ),
+  );
   $("#openBrowser").disabled = current !== "IDLE";
   $("#authComplete").disabled = current !== "AUTHENTICATING";
   $("#startTeaching").disabled = current !== "READY_TO_TEACH";
@@ -305,7 +414,9 @@ function renderButtons() {
     "STOPPED",
   ].includes(current);
   $("#compile").disabled =
-    current !== "DEMONSTRATION_REVIEW" || requestInFlight;
+    current !== "DEMONSTRATION_REVIEW" ||
+    requestInFlight ||
+    !hasSelectedPositiveEvidence;
   $("#compile").textContent = state?.compilationDiagnostic
     ? "Retry compile"
     : "Compile";
@@ -313,6 +424,10 @@ function renderButtons() {
     !state?.browser?.open ||
     requestInFlight ||
     ["RECORDING", "COMPILING", "RUNNING"].includes(current);
+  $("#recaptureOutcome").disabled =
+    current !== "DEMONSTRATION_REVIEW" || requestInFlight;
+  $("#useCurrentOutcome").disabled =
+    current !== "DEMONSTRATION_REVIEW" || requestInFlight;
   $("#animatedRun").disabled =
     !hasWorkflow ||
     !["READY_TO_RUN", "PASSED", "FAILED", "STOPPED"].includes(current);
@@ -348,13 +463,19 @@ function render() {
   $("#recordingIndicator").className =
     "recording-indicator" + (recording ? " active" : "");
   const lastDemonstration = state.lastDemonstration;
-  $("#lastDemonstrationStatus").textContent = !lastDemonstration?.available
-    ? "No completed local demonstration is available."
-    : lastDemonstration.structurallyCompatible
-      ? `Ready to restore · ${lastDemonstration.profileId} · structure compatible.`
-      : state.browser.open
-        ? `Stored profile ${lastDemonstration.profileId} is structurally incompatible with the current page.`
-        : `Stored locally for ${lastDemonstration.profileId}. Open and authenticate that profile to restore it.`;
+  const missingOutcomeSuffix =
+    lastDemonstration?.missingOutcomeFields?.length > 0
+      ? ` Missing outcome fields: ${lastDemonstration.missingOutcomeFields.join(", ")}.`
+      : "";
+  $("#lastDemonstrationStatus").textContent =
+    (!lastDemonstration?.available
+      ? "No completed local demonstration is available."
+      : lastDemonstration.structurallyCompatible
+        ? `Ready to restore · ${lastDemonstration.profileId} · structure compatible.`
+        : state.browser.open
+          ? `Stored profile ${lastDemonstration.profileId} is structurally incompatible with the current page.`
+          : `Stored locally for ${lastDemonstration.profileId}. Open and authenticate that profile to restore it.`) +
+    missingOutcomeSuffix;
   $("#runtimeState").textContent = state.telemetry
     ? `${state.telemetry.state} · ${state.telemetry.mode} · ${state.telemetry.steps.length} steps`
     : state.workflow
@@ -366,6 +487,7 @@ function render() {
   renderGraph(state.session?.pageGraph?.nodes ?? []);
   renderTimeline(state.session?.actions ?? []);
   renderVariables(state.session?.variables ?? [], state.localRuntimeVariables);
+  renderOutcomeCandidates(state.session);
   $("#demonstrationJson").textContent = pretty(
     state.session,
     "No demonstration recorded.",
@@ -465,6 +587,24 @@ $("#restoreLastDemonstration").addEventListener(
       "/api/teaching/restore-last",
       {},
       "Last completed synthetic demonstration restored for compilation.",
+    ),
+);
+$("#recaptureOutcome").addEventListener(
+  "click",
+  () =>
+    void mutate(
+      "/api/teaching/reconcile-outcome",
+      { useCurrentState: false },
+      "Current stable application state reconciled.",
+    ),
+);
+$("#useCurrentOutcome").addEventListener(
+  "click",
+  () =>
+    void mutate(
+      "/api/teaching/reconcile-outcome",
+      { useCurrentState: true },
+      "Current stable state selected as demonstrated success.",
     ),
 );
 

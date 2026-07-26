@@ -34,10 +34,24 @@ test.describe("required demonstration-first consultation workflow", () => {
             expect.objectContaining({ action: "popup-open" }),
             expect.objectContaining({ action: "popup-close" }),
             expect.objectContaining({
-              action: "assert",
+              action: "click",
               observedEffects: expect.arrayContaining([
                 expect.objectContaining({ type: "success-visible" }),
+                expect.objectContaining({ type: "history-increased" }),
+                expect.objectContaining({ type: "stability-reconciled" }),
               ]),
+            }),
+          ]),
+        );
+        expect(session.outcomeCandidates).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "relative-count-increase",
+              observed: true,
+              selected: true,
+              required: true,
+              beforeCount: 0,
+              afterCount: 1,
             }),
           ]),
         );
@@ -101,9 +115,7 @@ test.describe("required demonstration-first consultation workflow", () => {
         expect(first.state).toBe("Passed");
         expect(first.llmCalls).toBe(0);
         expect(first.openAIRequests).toBe(0);
-        await expect(await consultationEditor(page)).toHaveValue(
-          demonstratedValue,
-        );
+        await expect(await consultationEditor(page)).toHaveValue("");
         await expect(page.locator('[name="date_consultation"]')).toHaveValue(
           before.date,
         );
@@ -324,13 +336,11 @@ test.describe("editor strategies", () => {
             mode: "local",
           }).run();
           expect(telemetry.state).toBe("Passed");
-          await expect(page.getByLabel("Texte de consultation")).toHaveText(
-            value,
-          );
+          await expect(page.getByLabel("Texte de consultation")).toHaveText("");
           if (editor === "facade") {
             await expect(
               page.locator('[name="consultation_backing"]'),
-            ).toHaveValue(value);
+            ).toHaveValue("");
           }
         },
       );
@@ -383,7 +393,7 @@ test.describe("editor strategies", () => {
           page
             .frameLocator('iframe[title="Éditeur de consultation"]')
             .getByLabel("Texte de consultation"),
-        ).toHaveValue("Iframe consultation value");
+        ).toHaveValue("");
       },
     );
   });

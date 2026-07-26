@@ -2,8 +2,8 @@
 
 ## Current milestone
 
-Milestone 12 — actionable save targeting, persistent diagnostics, and
-restart-safe demonstration recovery.
+Milestone 13 — stable after-state reconciliation and relative application
+outcomes.
 
 ## Completed
 
@@ -36,13 +36,23 @@ restart-safe demonstration recovery.
   session/value separation and profile/structural compatibility checks.
 - Studio restart restore controls and browser-backed compatible/incompatible
   recovery coverage.
+- Bounded 500 ms DOM quiet-period reconciliation with a configurable five
+  second maximum, including late popup, frame replacement and page effects.
+- Privacy-safe application outcome candidates and an editable Studio evidence
+  review before compilation.
+- Relative scoped history increments with a fresh runtime baseline for every
+  Run locally and Run again.
+- Runtime checks for popup completion, canonical page return, editor reset,
+  Date/Heure invariants, known error markers, and missing history increments.
+- Redacted application-outcome diagnostics and negative browser regressions for
+  missing save, missing history, and early Stop reconciliation.
 
 ## Tests
 
 - `npm run build`: passed.
-- `npm test`: 45/45 passed across 8 files.
+- `npm test`: 47/47 passed across 8 files.
 - `npm run test:security`: 5/5 passed.
-- `npm run test:e2e`: 17/17 passed.
+- `npm run test:e2e`: 20/20 passed.
 
 ## Demo readiness
 

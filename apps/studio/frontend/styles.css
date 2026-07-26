@@ -505,6 +505,49 @@ textarea {
   font-size: 10px;
 }
 
+.outcome-review {
+  padding: 13px;
+  border: 1px solid #b9d3c6;
+  border-radius: 11px;
+  background: #f7fbf8;
+}
+
+.outcome-candidate {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.outcome-candidate strong,
+.outcome-candidate span {
+  display: block;
+}
+
+.outcome-candidate span,
+.outcome-controls {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.candidate-rejected {
+  color: var(--red) !important;
+}
+
+.outcome-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.outcome-controls label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+}
+
 .generalization {
   margin-top: 18px;
   padding: 15px;

@@ -94,6 +94,7 @@ export function renderFixture(url: URL) {
   const variant = url.searchParams.get("variant") === "B" ? "B" : "A";
   const editor = url.searchParams.get("editor") ?? "iframe";
   const shouldFail = url.searchParams.get("fail") === "1";
+  const suppressHistory = url.searchParams.get("noHistory") === "1";
   const first = variant === "A" ? identitySection() : readonlySection();
   const second = variant === "A" ? readonlySection() : identitySection();
   return `<!doctype html>
@@ -129,6 +130,7 @@ export function renderFixture(url: URL) {
   </main>
   <script>
     const shouldFail = ${JSON.stringify(shouldFail)};
+    const suppressHistory = ${JSON.stringify(suppressHistory)};
     let saves = 0;
     function consultationValue() {
       const frame = document.querySelector('[data-vc-field="consultation-frame"]');
@@ -149,17 +151,24 @@ export function renderFixture(url: URL) {
       status.className = 'status success';
       status.textContent = 'Consultation synthétique enregistrée.';
       const history = document.querySelector('[data-vc-consultation-history]');
-      const entry = document.createElement('li');
-      entry.textContent = 'Consultation synthétique enregistrée · entrée ' + saves;
-      history.append(entry);
+      if (!suppressHistory) {
+        const entry = document.createElement('li');
+        entry.textContent = 'Consultation synthétique enregistrée · ' + savedConsultation;
+        history.append(entry);
+      }
       const frame = document.querySelector('[data-vc-field="consultation-frame"]');
       if (frame) {
         const replacement = frame.cloneNode(false);
-        replacement.addEventListener('load', () => {
-          const editor = replacement.contentDocument?.querySelector('[data-vc-field="consultation"]');
-          if (editor) editor.value = savedConsultation;
-        }, { once: true });
         frame.replaceWith(replacement);
+      } else {
+        const editor = document.querySelector('[data-vc-field="consultation"]');
+        if (editor) {
+          if (editor.isContentEditable) editor.textContent = '';
+          else editor.value = '';
+          const backingSelector = editor.dataset?.vcBacking;
+          const backing = backingSelector ? document.querySelector(backingSelector) : undefined;
+          if (backing) backing.value = '';
+        }
       }
     };
     window.saveConsultation = function(event) {

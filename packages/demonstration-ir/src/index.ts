@@ -170,11 +170,16 @@ export const ObservedEffectSchema = z.object({
   type: z.enum([
     "dom-change",
     "navigation",
+    "frame-replaced",
     "popup-opened",
     "popup-closed",
     "dialog-opened",
     "focus-moved",
     "value-synchronized",
+    "history-increased",
+    "editor-reset",
+    "returned-to-page",
+    "stability-reconciled",
     "success-visible",
     "error-visible",
   ]),
@@ -248,6 +253,64 @@ export const StructuralSnapshotSchema = z.object({
   capturedAt: z.string().datetime(),
 });
 
+export const ApplicationStateSchema = z.object({
+  pageContextId: z.string(),
+  origin: z.string(),
+  pathname: z.string(),
+  capturedAt: z.string().datetime(),
+  historySelector: z.string().optional(),
+  historyCount: z.number().int().nonnegative().optional(),
+  editorPresent: z.boolean(),
+  editorEmpty: z.boolean().optional(),
+  successMarkerVisible: z.boolean(),
+  errorMarkerVisible: z.boolean(),
+});
+
+export const OutcomeCandidateTypeSchema = z.enum([
+  "relative-count-increase",
+  "new-scoped-item",
+  "new-item-contains-variable",
+  "editor-reset",
+  "popup-lifecycle",
+  "returned-to-page",
+  "field-unchanged",
+  "success-marker",
+]);
+
+export const ApplicationOutcomeCandidateSchema = z.object({
+  id: z.string(),
+  type: OutcomeCandidateTypeSchema,
+  label: z.string(),
+  pageContextId: z.string(),
+  target: z.string(),
+  sourceActionId: z.string().optional(),
+  variableRef: z.string().optional(),
+  fieldLabel: z.string().optional(),
+  beforeCount: z.number().int().nonnegative().optional(),
+  afterCount: z.number().int().nonnegative().optional(),
+  minimumIncrease: z.number().int().positive().optional(),
+  observed: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  recommended: z.boolean(),
+  selected: z.boolean(),
+  required: z.boolean(),
+  rejectionReasons: z.array(z.string()).default([]),
+});
+
+export const EffectReconciliationSchema = z.object({
+  status: z.enum(["stable", "timed-out", "legacy-insufficient"]),
+  quietPeriodMs: z.number().int().positive(),
+  maximumObservationMs: z.number().int().positive(),
+  observedForMs: z.number().int().nonnegative(),
+  mutationCount: z.number().int().nonnegative(),
+  popupOpened: z.boolean(),
+  popupClosed: z.boolean(),
+  frameReplacementObserved: z.boolean(),
+  pageContextReturned: z.boolean(),
+  editorResetObserved: z.boolean(),
+  reconciledAt: z.string().datetime(),
+});
+
 export const DemonstrationSessionSchema = z.object({
   id: z.string(),
   startedAt: z.string().datetime(),
@@ -258,6 +321,10 @@ export const DemonstrationSessionSchema = z.object({
   variables: z.array(WorkflowVariableSchema),
   beforeState: StructuralSnapshotSchema.optional(),
   afterState: StructuralSnapshotSchema.optional(),
+  applicationStateBefore: ApplicationStateSchema.optional(),
+  applicationStateAfter: ApplicationStateSchema.optional(),
+  outcomeCandidates: z.array(ApplicationOutcomeCandidateSchema).default([]),
+  effectReconciliation: EffectReconciliationSchema.optional(),
   authenticationExcluded: z.literal(true),
 });
 
@@ -404,10 +471,16 @@ export const OutcomeEvidenceSchema = z.object({
     "navigation",
     "popup-closed",
     "structural-marker",
+    "relative-count-increase",
+    "new-item-contains-variable",
+    "editor-reset",
+    "field-unchanged",
   ]),
   pageContextId: z.string(),
   target: z.string(),
-  expected: z.union([z.string(), z.boolean()]),
+  expected: z.union([z.string(), z.number(), z.boolean()]),
+  sourceStepId: z.string().optional(),
+  variableRef: z.string().optional(),
   required: z.boolean().default(true),
 });
 
@@ -497,8 +570,8 @@ export const RuntimeTelemetrySchema = z.object({
     z.object({
       type: z.string(),
       target: z.string(),
-      expected: z.union([z.string(), z.boolean()]),
-      actual: z.union([z.string(), z.boolean()]),
+      expected: z.union([z.string(), z.number(), z.boolean()]),
+      actual: z.union([z.string(), z.number(), z.boolean()]),
       passed: z.boolean(),
     }),
   ),
@@ -516,6 +589,10 @@ export type ObservedEffect = z.infer<typeof ObservedEffectSchema>;
 export type RecordedAction = z.infer<typeof RecordedActionSchema>;
 export type WorkflowVariable = z.infer<typeof WorkflowVariableSchema>;
 export type DemonstrationSession = z.infer<typeof DemonstrationSessionSchema>;
+export type ApplicationState = z.infer<typeof ApplicationStateSchema>;
+export type ApplicationOutcomeCandidate = z.infer<
+  typeof ApplicationOutcomeCandidateSchema
+>;
 export type LocatorRule = z.infer<typeof LocatorRuleSchema>;
 export type LocatorCandidate = z.infer<typeof LocatorCandidateSchema>;
 export type CompiledPageContext = z.infer<typeof CompiledPageContextSchema>;
