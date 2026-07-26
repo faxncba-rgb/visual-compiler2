@@ -8,11 +8,28 @@
   preserve fully manual authentication and explicit recorder start.
 - Add monotonic temporal actions, causal popup/navigation/frame links,
   per-action stable-state snapshots and checkbox/dropdown/menu capture.
+- Replace delayed DOM-node value reads with durable editing transactions that
+  flush before causal boundaries and preserve the initial semantic target
+  through rerenders and iframe replacement.
+- Persist authorized demonstrated text as explicit workflow literals; compile
+  copy/paste as extract plus memory-only runtime dataflow while rejecting
+  authentication values.
+- Add ordered deterministic input strategies with mandatory post-entry value
+  verification so a failed fill aborts before the following save.
+- Reacquire live pages, popups and same-origin frames from semantic identity;
+  cover popup editing, closure/return, dialogs and replaced frames.
+- Add the minimal Workflow Library with automatic immutable versioning,
+  restart-safe selection, last-run status and compatible legacy discovery.
+- Add automatic redacted Before/Action/After Teaching traces, with screenshots
+  restricted to synthetic automated fixtures.
+- Patch Playwright to 1.55.1 and Vitest to 3.2.6, the minimum advisory-fixed
+  releases; production dependency audit is clean.
 - Compile demonstrations with missing outcomes and report
   COMPLETED_UNVERIFIED instead of incorrectly reporting PASSED.
 - Automatically select only the strongest derived outcome evidence.
 - Expand persistent redacted diagnostics to browser, compiler, request and
-  runtime failures with Copy, Clear, contextual Retry, terminal and JSONL log.
+  runtime failures with Copy, Clear, contextual Retry, terminal and JSONL log;
+  keep failures visible through failed retries until success or explicit Clear.
 - Move raw developer artifacts into collapsed Advanced details and keep
   optional AI generalization collapsed.
 - Restrict automated targets to explicit local URLs and isolate the browser

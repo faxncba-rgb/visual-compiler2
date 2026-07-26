@@ -2,15 +2,17 @@
 
 ## Current milestone
 
-Milestone 15.8 — full recorder, security and end-to-end validation.
+Milestone 15.9 — completed; documentation, clean-install validation and
+delivery.
 
 ## Milestone objective
 
-- Exercise every required editing, frame, popup, dataflow, library and
-  persistent-diagnostic path with local synthetic fixtures.
-- Verify exact development-loader behavior without recorder serialization
-  regressions.
-- Keep the real DPI and OpenAI outside all automated validation.
+- Document the delivered recorder/runtime/value/library/security contracts and
+  exact manual retest.
+- Revalidate from `npm ci`, scan artifacts/logs/dependencies and exercise the
+  exact development loader.
+- Commit and push only the development branch without modifying or merging
+  `main`.
 
 ## Milestone 15.1 finding
 
@@ -203,6 +205,46 @@ Milestone 15.8 — full recorder, security and end-to-end validation.
 - Documentation, clean-install revalidation and final repository/artifact scans
   remain.
 - The real DPI remains an explicit manual operator retest.
+
+## Milestone 15.9 implementation
+
+- Updated product, architecture, security, changelog and manual-test
+  documentation for durable editing transactions, live context reacquisition,
+  ordered input verification and honest runtime outcomes.
+- Documented authorized persisted literals, ephemeral runtime variables and
+  forbidden authentication/secrets as three separate value classes.
+- Documented automatic immutable library persistence, redacted Teaching traces,
+  persistent diagnostics and zero-OpenAI runtime boundaries.
+- Added the collaboration handoff invariants and exact local validation
+  checklist without claiming universal website support.
+- Updated Playwright to 1.55.1 and Vitest to 3.2.6, their minimum
+  advisory-fixed patch releases; `npm audit --omit=dev` reports zero
+  vulnerabilities.
+
+## Remaining after Milestone 15.9
+
+- The real DPI remains an explicit manual operator retest.
+- ESLint's development-only minimatch/brace-expansion chain remains pinned
+  until a deliberate ESLint major-version migration; it is not imported by the
+  Studio or deterministic runtime and receives no untrusted runtime input.
+
+## Milestone 15.9 validation
+
+- `npm ci`: passed with the locked dependency graph.
+- `npm run format:check`: passed.
+- `npm run build`: passed.
+- `npm test`: 49/49 passed across 8 files under Vitest 3.2.6.
+- `npm run test:security`: 7/7 passed.
+- `npm run test:e2e`: 29/29 passed under Playwright 1.55.1 and Chromium build
+  1193, including the exact `npm run dev` loader and complete Layout A Studio
+  flow.
+- `npm audit --omit=dev`: zero production vulnerabilities.
+- Runtime package/import scan: no OpenAI SDK dependency; only the local
+  `isOpenAIUrl` fail-closed network guard is imported.
+- Git/local-data scan: no tracked browser profile or runtime artifact; no
+  credential, cookie, token, query-bearing URL, API key or runtime-copied
+  synthetic content in local persisted artifacts. Authorized test literals are
+  intentionally asserted inside versioned workflow bundles.
 
 ## Completed
 

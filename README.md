@@ -44,8 +44,11 @@ Open <http://127.0.0.1:3100>. The normal flow is:
 1. Authenticate and navigate manually in the browser that opened
    automatically.
 2. Select **Start teaching**, perform the workflow, then **Stop teaching**.
-3. Review the concise chronological timeline and select **Compile**.
+3. Optionally enter a **Workflow name**, review the concise chronological
+   timeline and select **Compile**.
 4. Select **Run locally**. Use **Run again** to replay the same artifact.
+5. Later, select an immutable version from **Saved workflows** and run it
+   without teaching again.
 
 **1st run — animated** is an optional presentation mode. It uses the same
 artifact and runtime as local execution; local execution supplies no animation
@@ -60,11 +63,15 @@ provider is a validated mock and makes no network request.
 The recorder consolidates raw browser noise into high-level actions:
 
 - click and double click, promoting nested targets to the actionable ancestor;
-- one fill action for an ordinary typing burst;
+- one committed editing transaction for an ordinary typing or composition
+  burst, flushed before click, submit, navigation, frame detach, page close or
+  **Stop teaching**;
 - meaningful keys and shortcuts, including Tab, Enter, Escape and arrows;
 - check, uncheck, select, submit and causally relevant focus;
 - actions in same-origin frames and managed popups;
-- popup, dialog, navigation, frame replacement and closure events.
+- popup editing, dialog, navigation, frame replacement and closure events;
+- explicit extract-to-memory and memory-to-target dataflow for observable
+  copy/paste gestures.
 
 Every action has a monotonic sequence and time offset, stable page/frame
 context, semantic target descriptor, action compatibility, observed reactions,
@@ -74,11 +81,50 @@ not Playwright `Page` or `Frame` objects. Stop teaching performs bounded DOM
 quiet detection and reconciles late popup, rerender, iframe and outcome
 effects.
 
+The target descriptor is captured when an edit starts, before a legacy editor
+or iframe can rerender. Runtime reacquires the current live page, popup, frame
+and element from that descriptor instead of retaining stale browser objects.
+
 Target descriptors use accessibility names, labels, control family, editable,
 readonly, enabled, checked/selected state, form and semantic container,
 neighbors, frame/page description, stable attributes and secondary geometry.
 Coordinates are never a primary locator, and a field is never selected merely
 because it is the first textbox.
+
+## Workflow values
+
+Visual Compiler 2 distinguishes three value classes:
+
+- authorized demonstrated text is a
+  `literal / workflow` constant stored in the local artifact and replayed
+  exactly;
+- copied page content is a `runtime-variable / memory-only` value extracted
+  again on every run and never stored in the artifact, generated source,
+  diagnostics or Studio event log;
+- credentials, passwords, authentication-like fields, cookies, tokens, browser
+  storage, authorization/CSRF data, session identifiers and query parameters
+  are forbidden and excluded before recording or persistence.
+
+The deterministic compiler records an ordered entry strategy for every editable
+target: standard fill, contenteditable fill, sequential keys when required,
+legacy visible-editor/backing-field synchronization, then a documented native
+setter Lab fallback. Runtime verifies the resulting live value before executing
+the next action. A failed fill therefore stops before **Enregistrer** and cannot
+produce a false `PASSED`.
+
+## Workflow Library
+
+A successful compile with a non-empty **Workflow name** automatically writes a
+new immutable version under `local-data/workflow-library/`. The local index and
+bundles use private file permissions where supported. Recompiling creates the
+next version rather than overwriting a working artifact. Selecting an entry
+from **Saved workflows** loads it into `READY_TO_RUN`; saved versions remain
+available after a Studio restart. Compatible legacy compiled JSON artifacts are
+listed read-only where practical.
+
+Library metadata contains canonical origins and paths, locator/verification
+metadata, checksum and last-run state. It never contains authentication state,
+query strings or runtime-derived copied content.
 
 ## Compilation and outcomes
 
@@ -104,11 +150,13 @@ Visual Compiler 2 never reports `PASSED` from action completion alone.
 ## Persistent diagnostics
 
 Every browser-open, compile, request or runtime failure produces a persistent
-redacted diagnostics card. It remains visible until a new compilation or an
-explicit **Clear**. **Retry** performs the relevant browser, compile or runtime
-operation and **Copy diagnostics** copies one paste-ready block containing the
-timestamp, HTTP status, stage, workflow state, redacted server message and
-available step/target/locator/reaction evidence.
+redacted diagnostics card. It appears immediately and remains visible until a
+subsequent successful compile/run or an explicit **Clear**. A failed retry does
+not replace it with a temporary-only toast. **Retry** performs the relevant
+browser, compile or runtime operation and **Copy diagnostics** copies one
+paste-ready block containing the timestamp, HTTP status, compiler/runtime
+stage, workflow state, redacted server message, Teaching trace ID and available
+step/target/locator/reaction evidence.
 
 The same record is appended to `local-data/studio-events.jsonl` and written to
 the Studio terminal. Form values, patient data, full query-bearing URLs,
@@ -116,11 +164,18 @@ cookies, tokens, storage, passwords and authentication headers are excluded.
 Raw IR, locators, generated outline, payload preview and logs live in the
 collapsed **Advanced details** section.
 
+Teaching automatically writes a structural Before/Action/After trace under
+`local-data/teaching-traces/`. Trace JSONL contains timing and redacted semantic
+structure, never typed or copied contents. Screenshots are enabled only for
+synthetic automated fixtures; normal managed-browser sessions persist metadata
+only.
+
 ## Stored demonstrations
 
 The last completed demonstration is stored under
-`local-data/last-demonstration/` with structural session data and local values
-in separate files. Restore requires a compatible live page structure. Existing
+`local-data/last-demonstration/` with its structural session and authorized
+workflow literals. Legacy local-value files remain readable for compatible old
+artifacts. Restore requires a compatible live page structure. Existing
 demonstrations that lack outcome evidence migrate to `UNVERIFIED` and remain
 compilable; they are not deleted.
 
@@ -155,6 +210,13 @@ The deterministic runtime has no OpenAI dependency, does not read an API key,
 and blocks OpenAI HTTP and WebSocket endpoints. Telemetry always exposes
 `llmCalls` and `openAIRequests`; successful local runs keep both at zero.
 
+Known deliberate limits: cross-origin frame contents, closed shadow DOM and
+fully virtualized copy/paste gestures without observable DOM events are not
+recorded. Native setter support is a final Lab fallback, not a claim of
+universal website compatibility. Automated tests never contact the real DPI;
+that retest remains an authorized manual operator action.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md),
+[CODEX_COLLABORATION.md](CODEX_COLLABORATION.md),
 [MIGRATION_NOTES.md](MIGRATION_NOTES.md), [DECISIONS.md](DECISIONS.md), and
 [docs/MANUAL_TEST.md](docs/MANUAL_TEST.md).

@@ -18,15 +18,30 @@ diagnostics or AI payloads.
 ## Persistence and redaction
 
 Persisted page identity contains only canonical origin and pathname. Query
-parameters, hashes, form values, patient-like identifiers, cookies, tokens,
-passwords, browser storage and authorization data are excluded from semantic
-artifacts and diagnostic records. Runtime values are stored separately under
-Git-ignored `local-data/`.
+parameters, hashes, patient/session identifiers, cookies, tokens, passwords,
+browser storage and authorization data are excluded from semantic artifacts and
+diagnostic records.
+
+Demonstrated non-sensitive text is intentionally allowed in local workflow
+artifacts as an authorized `{ kind: "literal", persistence: "workflow" }`
+constant. Authentication-like controls are rejected before their value is
+captured. Text extracted from a page by a copy/paste demonstration uses a
+`runtime-variable / memory-only` reference: its content exists only in the
+per-run memory map and is absent from workflow definitions, generated source,
+Studio events, traces, telemetry and diagnostics.
 
 Diagnostics use one redacted object for the visible panel, clipboard, terminal
 and `local-data/studio-events.jsonl`. Redaction covers live form values and
-explicit generalization text in addition to secret-shaped fields and
-query-bearing URLs.
+authorized session/workflow literals in addition to explicit generalization
+text, secret-shaped fields and query-bearing URLs. A compile/runtime failure is
+not reduced to a temporary toast: the redacted object stays visible until a
+successful operation or explicit **Clear**.
+
+Workflow Library bundles/indexes and Teaching traces live under Git-ignored
+`local-data/` with mode `0600` where supported. Trace JSONL contains structural
+Before/Action/After metadata but no typed/copied content or visible page text.
+Synthetic automated fixtures may persist trace screenshots; normal managed DPI
+sessions persist metadata only.
 
 ## Network boundaries
 
@@ -41,12 +56,19 @@ OpenAI HTTP and WebSocket endpoints before dispatch. An attempted call is
 reported as a failed policy check while telemetry remains `llmCalls: 0` and
 `openAIRequests: 0`.
 
+Runtime source and dependency-graph checks are part of final validation. No
+OpenAI SDK package is imported or installed.
+
 ## Supported use
 
 Allowed: local, authorized, synthetic browser workflow development.
 
 Excluded: credential capture, CAPTCHA bypass, stealth or anti-detection,
 unauthorized access, real patient data and autonomous clinical decisions.
+
+Cross-origin frame contents and closed shadow DOM are deliberately not
+inspected. Copy/paste dataflow requires observable browser events; invisible
+application-private channels are unsupported.
 
 Report vulnerabilities privately without attaching credentials, browser
 profiles, local values or sensitive screenshots.

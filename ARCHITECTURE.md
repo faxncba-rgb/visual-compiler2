@@ -8,12 +8,15 @@ local replay**.
 flowchart LR
   Studio["Studio (127.0.0.1)"] --> Browser["Dedicated managed Chromium"]
   Browser --> Recorder["Temporal/causal recorder"]
+  Recorder --> Trace["Redacted Teaching trace"]
   Recorder --> Graph["Page Context Graph"]
   Recorder --> IR["Validated Demonstration IR"]
   IR --> Compiler["Direct compiler"]
   IR -. "redacted structure + explicit instruction" .-> Mock["Validated mock generalizer"]
   Compiler --> Artifact["Versioned artifact"]
   Mock --> Artifact
+  Artifact --> Library["Immutable local Workflow Library"]
+  Library --> Runtime
   Artifact --> Runtime["Deterministic runtime"]
   Runtime --> Outcome["Verified / unverified result"]
   Runtime --> Telemetry["llmCalls=0, openAIRequests=0"]
@@ -37,11 +40,18 @@ browser memory for the live session but are removed from persisted identities.
 
 ## Temporal and causal recorder
 
-The browser initialization script observes high-level click, double-click,
-input, change, meaningful key and submit events. Pointer noise is ignored;
-typing bursts debounce into one fill; checkbox input/change noise is represented
-by one check/uncheck action. Nested click targets are promoted to the closest
-actionable ancestor.
+The BrowserContext initialization script instruments every existing/new page,
+managed popup and same-origin frame. Frame attach/navigation/detach, dialog,
+popup close and opener return events are observed at the context boundary.
+Nested click targets are promoted to the closest actionable ancestor.
+
+Editable focus starts a first-class transaction. The recorder captures the
+semantic target immediately, then consolidates `beforeinput`, `input`, `change`,
+composition, paste, meaningful keyboard and selection signals. The transaction
+is durably updated as the value changes and is committed before click, submit,
+navigation, frame detach, page close, popup transition, focusout or **Stop
+teaching**. It never waits to reread an old DOM node after a rerender. Checkbox
+input/change noise similarly becomes one check/uncheck action.
 
 Each recorded action contains:
 
@@ -57,6 +67,10 @@ After every meaningful action, the recorder runs bounded DOM-quiet detection.
 Stop teaching performs a final bounded reconciliation and associates late
 popup, navigation, iframe replacement, history, reset, success and error
 effects with the last causal action.
+
+Observable copy/paste is represented as explicit dataflow: an `extract` action
+writes an ephemeral runtime variable and the destination edit references that
+variable. The operating-system clipboard is not the runtime data channel.
 
 ## Page Context Graph
 
@@ -88,15 +102,29 @@ The locator engine ranks accessibility and stable structural evidence:
 Ambiguous, invisible, disabled or type-incompatible targets fail compilation
 with structural counts and rejection reasons. Coordinates are not compiled.
 
-Demonstrated values become local variable references. Semantic artifacts,
-Git-ignored local values and optional AI instructions are separate. Values do
-not enter the redacted AI preview by default.
+Values have an explicit persistence contract:
+
+- `{ kind: "literal", value, persistence: "workflow" }` is an authorized
+  demonstrated constant persisted in the local executable artifact;
+- `{ kind: "runtime-variable", name, persistence: "memory-only" }` is produced
+  by `extract`, exists only in the runtime map and is never serialized with its
+  content;
+- authentication-like controls and secret-shaped values are rejected before
+  they enter the Demonstration IR.
+
+Optional AI instructions and the redacted structural preview are separate from
+both classes. Neither receives literal or runtime-derived content.
 
 ## Compiler and outcome model
 
 The direct compiler translates a stopped demonstration without GPT. Optional
 generalization is currently handled by a strict, schema-validated mock that
 makes no model request.
+
+For an editable action, compilation records ordered deterministic strategies:
+standard Playwright fill, contenteditable fill, sequential keys,
+visible-editor/backing-field synchronization and a final native setter Lab
+fallback. Each strategy has target-family compatibility metadata.
 
 Compilation requires at least one executable target action, but does not
 require positive outcome evidence. The compiler selects only the strongest
@@ -108,13 +136,34 @@ verified outcome.
 
 Local and animated modes load the same artifact into the same engine. Animation
 is only a callback layer; local mode supplies none. The runtime reacquires page,
-frame and popup contexts, resolves semantic locators, executes chronological
-actions, checks known negative evidence and evaluates the compiled outcome.
+frame and popup contexts from semantic origin/path/opener/frame ancestry,
+rejects zero or ambiguous live matches, resolves semantic locators and executes
+chronological actions.
+
+Every text-entry strategy is followed by a live value check against
+`input.value`, `textarea.value`, contenteditable text or the known legacy
+backing field. A failed check aborts before the following click. `extract`
+values stay in an internal per-run map and are discarded at completion.
 
 An artifact produces `Passed` only with verified positive evidence. Successful
 actions with partial/no positive evidence produce `CompletedUnverified`.
 Action, locator or known application-error failures produce `Failed`.
 AbortSignal produces `Stopped`.
+
+## Immutable local library and forensic trace
+
+Compiling with a workflow name creates a new private bundle and index entry
+under `local-data/workflow-library/`. Versions are immutable; recompilation
+appends a version and older working bundles remain readable. The index contains
+canonical path patterns, verification/checksum data and last-run state but no
+query strings, authentication state or runtime-derived content. Compatible
+legacy compiled artifacts are loaded read-only.
+
+Start/Stop teaching automatically opens/closes a private JSONL trace under
+`local-data/teaching-traces/`. It stores bounded Before/Action/After structural
+evidence, timing, target/frame identity and reaction types. Values and visible
+page text are reduced to structural kinds. Only synthetic automated fixtures
+may persist before/after screenshots; normal managed-browser sessions never do.
 
 ## Diagnostics and isolation
 
@@ -125,3 +174,7 @@ object drives the visible card, clipboard text, in-memory event history,
 The runtime has no OpenAI dependency. Managed browser routing blocks OpenAI
 HTTP and WebSocket endpoints and turns attempts into policy failures. No live
 AI adapter is enabled.
+
+Deliberate unsupported boundaries are cross-origin frame internals, closed
+shadow DOM and application editors/copy gestures that expose no legitimate DOM
+signal. The implementation does not claim universal website support.

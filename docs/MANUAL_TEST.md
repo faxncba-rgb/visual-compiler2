@@ -17,16 +17,24 @@ does not contact the real DPI.
 6. Confirm the concise timeline is chronological, ordinary text is one fill,
    the nested Enregistrer target is the actionable link, popup/frame events
    follow it causally and the summary reports executable actions.
-7. Leave **Optional AI generalization** empty. Confirm
+7. Enter a unique synthetic name in **Workflow name**. Leave **Optional AI
+   generalization** empty. Confirm
    **Direct local compilation — no AI call**, then select **Compile**.
-8. Confirm `READY_TO_RUN` and no diagnostics. Open **Advanced details** only if
-   you need to inspect the Page Context Graph, variable or selected locator.
-9. Set the local consultation value if desired, select **Run locally**, and
-   confirm exactly one save, popup completion, editor reset and expected
-   history/result.
+8. Confirm `READY_TO_RUN`, the passive **Saved locally** status and the new
+   immutable version in **Saved workflows**. Confirm there are no diagnostics.
+   Open **Advanced details** only if you need to inspect the Page Context Graph
+   or selected locator.
+9. Select **Run locally** without entering another value. Confirm the exact
+   demonstrated literal is reinserted into the consultation editor, Date and
+   Heure remain unchanged, **Enregistrer** is invoked exactly once, the popup
+   completes, the editor resets and the expected history/result appears.
 10. Confirm result `PASSED`, Runtime LLM calls `0`, Runtime OpenAI requests `0`.
 11. Select **Run again** and confirm one additional deterministic replay without
     re-teaching or recompiling.
+12. Stop and restart Studio. Select the named version from **Saved workflows**,
+    confirm `READY_TO_RUN`, then run it again.
+13. Confirm the same literal, untouched Date/Heure fields, exactly one
+    **Enregistrer** action for this run and both runtime counters still at zero.
 
 ## Unverified-outcome retest
 
@@ -39,9 +47,12 @@ does not contact the real DPI.
 
 1. Trigger a synthetic/local compile ambiguity or other safe failure.
 2. Confirm the red diagnostic card appears immediately with HTTP status `422`,
-   stage, workflow state and redacted message.
+   compiler stage, workflow state, redacted server message and Teaching trace
+   ID.
 3. Confirm **Retry compile**, **Copy diagnostics** and **Clear** are visible.
-4. Wait and reload Studio; confirm the diagnostic remains visible.
+4. Wait and reload Studio; confirm the diagnostic remains visible. Trigger a
+   failed retry and confirm the same persistent panel remains; a toast alone is
+   not acceptable.
 5. Copy it and confirm no form value, patient/query parameter, cookie, token,
    password or authentication header is present.
 6. Open **Advanced details → Persistent Studio event log** and confirm the same
@@ -49,3 +60,12 @@ does not contact the real DPI.
 7. Correct the ambiguity and choose **Retry compile** without re-teaching.
 8. Trigger another diagnostic, select **Clear**, and confirm only the visible
    card clears while the append-only event log remains.
+
+## Deliberate boundaries
+
+- Use only authorized synthetic data; automated tests never contact the real
+  DPI.
+- Cross-origin frame contents, closed shadow DOM and copy/paste gestures that
+  expose no browser DOM event are unsupported.
+- Native value-setting is a bounded final Lab fallback, not a universal editor
+  compatibility claim.
