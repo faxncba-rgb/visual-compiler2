@@ -910,7 +910,8 @@ export function createStudioServer(controller = new StudioController()) {
       }
       if (request.method === "POST" && url.pathname === "/api/run") {
         const body = await readJson(request);
-        return sendJson(response, 200, await controller.run(body.mode));
+        await controller.run(body.mode);
+        return sendJson(response, 200, controller.snapshot());
       }
       if (request.method === "POST" && url.pathname === "/api/stop") {
         await controller.stop();

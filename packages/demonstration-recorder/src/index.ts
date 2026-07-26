@@ -318,6 +318,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
   Object.defineProperty(document, '__vc2RecorderInstalled', { value: true });
   globalThis.__vc2RecorderInstalled = true;
   const pendingInputs = new WeakMap();
+  const emittedInputValues = new WeakMap();
   const text = value => String(value || '').replace(/\\s+/g, ' ').trim();
   const staticInterfaceText = value => {
     const normalized = text(value).slice(0, 120);
@@ -527,6 +528,13 @@ const RECORDER_INIT_SCRIPT = `(() => {
   const send = payload => {
     try { void globalThis.__vc2Record(payload); } catch {}
   };
+  const sendValue = (element, info, kind) => {
+    const value = element.isContentEditable ? element.textContent : element.value;
+    const comparableValue = String(value ?? '');
+    if (emittedInputValues.get(element) === comparableValue) return;
+    emittedInputValues.set(element, comparableValue);
+    send({ kind, target: info, value, occurredAt: Date.now() });
+  };
   document.addEventListener('click', event => {
     const raw = event.target;
     const element = actionableAncestor(raw) ||
@@ -556,17 +564,21 @@ const RECORDER_INIT_SCRIPT = `(() => {
     const existing = pendingInputs.get(element);
     if (existing) clearTimeout(existing);
     pendingInputs.set(element, setTimeout(() => {
-      const value = element.isContentEditable ? element.textContent : element.value;
-      send({ kind: 'fill', target: info, value, occurredAt: Date.now() });
+      pendingInputs.delete(element);
+      sendValue(element, info, 'fill');
     }, 300));
   }, true);
   document.addEventListener('change', event => {
     const element = event.target;
     const info = target(element);
     if (!info || info.password) return;
-    const value = element.value;
+    const existing = pendingInputs.get(element);
+    if (existing) {
+      clearTimeout(existing);
+      pendingInputs.delete(element);
+    }
     const kind = element.tagName === 'SELECT' ? 'select' : 'fill';
-    send({ kind, target: info, value, occurredAt: Date.now() });
+    sendValue(element, info, kind);
   }, true);
   document.addEventListener('keydown', event => {
     if (!['Enter','Escape','Tab','ArrowDown','ArrowUp'].includes(event.key)) return;
@@ -646,11 +658,6 @@ async function frameHostEvidence(frame: Frame) {
   return frameElement
     .evaluate((element) => {
       const host = element as Element;
-      const normalize = (value: string | null | undefined) =>
-        String(value ?? "")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 120);
       const container = host.closest(
         "section,form,article,[role=dialog],[role=region]",
       );
@@ -659,7 +666,12 @@ async function frameHostEvidence(frame: Frame) {
       const labels = Array.from(
         labelRoot.querySelectorAll<Element>("label,h1,h2,h3,th"),
       )
-        .map((node) => normalize(node.textContent))
+        .map((node) =>
+          String(node.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 120),
+        )
         .filter(Boolean)
         .slice(0, 8);
       const precedingLabels = Array.from(
@@ -672,7 +684,12 @@ async function frameHostEvidence(frame: Frame) {
           ),
         )
         .slice(-8)
-        .map((node) => normalize(node.textContent))
+        .map((node) =>
+          String(node.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 120),
+        )
         .filter(Boolean);
       const action = container?.querySelector(
         "button,[role=button],a[data-vc-action]",
@@ -682,13 +699,21 @@ async function frameHostEvidence(frame: Frame) {
         semanticContainer: container
           ? {
               tag: container.tagName.toLowerCase(),
-              heading: normalize(heading?.textContent) || undefined,
+              heading:
+                String(heading?.textContent ?? "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .slice(0, 120) || undefined,
               landmark: container.getAttribute("role") || undefined,
             }
           : undefined,
         labels,
         precedingLabels,
-        relatedActionName: normalize(action?.textContent) || undefined,
+        relatedActionName:
+          String(action?.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 120) || undefined,
       };
     })
     .catch(() => undefined);
@@ -1022,23 +1047,13 @@ export class DemonstrationRecorder {
       }),
     );
     const raw = await page.evaluate((entries) => {
-      const normalize = (value: unknown) =>
-        String(value ?? "")
-          .replace(/\s+/g, " ")
-          .trim();
-      const hash = (value: string) => {
-        let result = 2166136261;
-        for (let index = 0; index < value.length; index += 1) {
-          result ^= value.charCodeAt(index);
-          result = Math.imul(result, 16777619);
-        }
-        return `fnv1a-${(result >>> 0).toString(16).padStart(8, "0")}`;
-      };
       const history = document.querySelector("[data-vc-consultation-history]");
       const historyItems = history
         ? Array.from(history.querySelectorAll(":scope > li"))
         : [];
-      const lastItemText = normalize(historyItems.at(-1)?.textContent);
+      const lastItemText = String(historyItems.at(-1)?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
       let editor = document.querySelector<HTMLElement>(
         '[data-vc-field="consultation"]',
       );
@@ -1068,21 +1083,39 @@ export class DemonstrationRecorder {
         ["Heure", '[name="heure_consultation"]'],
       ] as const) {
         const field = document.querySelector<HTMLInputElement>(selector);
-        if (field) stableFieldFingerprints[label] = hash(field.value);
+        if (field) {
+          let fingerprint = 2166136261;
+          for (let index = 0; index < field.value.length; index += 1) {
+            fingerprint ^= field.value.charCodeAt(index);
+            fingerprint = Math.imul(fingerprint, 16777619);
+          }
+          stableFieldFingerprints[label] =
+            `fnv1a-${(fingerprint >>> 0).toString(16).padStart(8, "0")}`;
+        }
       }
-      const visible = (selector: string) => {
-        const element = document.querySelector(selector);
-        if (!element) return false;
-        const box = element.getBoundingClientRect();
-        return box.width > 0 && box.height > 0;
-      };
+      const successMarker = document.querySelector(
+        '[data-vc-outcome="success"]',
+      );
+      const successMarkerBox = successMarker?.getBoundingClientRect();
+      const errorMarker = document.querySelector('[data-vc-outcome="error"]');
+      const errorMarkerBox = errorMarker?.getBoundingClientRect();
       return {
         historyCount: history ? historyItems.length : undefined,
         editorPresent: Boolean(editor),
         editorEmpty:
-          editorValue === undefined ? undefined : normalize(editorValue) === "",
-        successMarkerVisible: visible('[data-vc-outcome="success"]'),
-        errorMarkerVisible: visible('[data-vc-outcome="error"]'),
+          editorValue === undefined
+            ? undefined
+            : String(editorValue).replace(/\s+/g, " ").trim() === "",
+        successMarkerVisible: Boolean(
+          successMarkerBox &&
+            successMarkerBox.width > 0 &&
+            successMarkerBox.height > 0,
+        ),
+        errorMarkerVisible: Boolean(
+          errorMarkerBox &&
+            errorMarkerBox.width > 0 &&
+            errorMarkerBox.height > 0,
+        ),
         origin: location.origin,
         pathname: location.pathname,
         stableFieldFingerprints,

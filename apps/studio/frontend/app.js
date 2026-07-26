@@ -621,8 +621,22 @@ async function compileWorkflow() {
     toast(
       "Validated artifact compiled. Animated and local run are both ready.",
     );
-  } catch {
+  } catch (error) {
+    const responseDiagnostic =
+      error instanceof ApiError ? error.diagnostic : undefined;
+    if (responseDiagnostic) {
+      if (state) state.compilationDiagnostic = responseDiagnostic;
+      renderCompilationDiagnostics(responseDiagnostic);
+      renderButtons();
+      $("#compilationDiagnostics").scrollIntoView({ block: "nearest" });
+    } else {
+      toast(error.message, true);
+    }
     await refresh();
+    if (responseDiagnostic && !state?.compilationDiagnostic) {
+      if (state) state.compilationDiagnostic = responseDiagnostic;
+      renderCompilationDiagnostics(responseDiagnostic);
+    }
   } finally {
     requestInFlight = false;
     renderButtons();

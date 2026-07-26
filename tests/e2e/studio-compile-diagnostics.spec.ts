@@ -1,13 +1,17 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, test, type Page } from "@playwright/test";
 import {
   StudioController,
   createStudioServer,
 } from "../../apps/studio/backend/src/server";
 import { locatorForRule } from "../../packages/locator-engine/src";
+
+const execFileAsync = promisify(execFile);
 
 async function listenOnEphemeralPort(server: Server) {
   await new Promise<void>((resolve, reject) => {
@@ -117,6 +121,29 @@ async function teachLegacyLayoutA(
   await expect(page.getByLabel("Instruction", { exact: true })).toHaveValue("");
   return { initialSchedule };
 }
+
+test("the recorder remains browser-serializable under the exact tsx dev loader", async () => {
+  const { stdout, stderr } = await execFileAsync(
+    process.execPath,
+    ["--import", "tsx", "tests/e2e/helpers/dev-mode-recorder-smoke.ts"],
+    {
+      cwd: path.resolve(import.meta.dirname, "../.."),
+      env: {
+        ...process.env,
+        VC_HEADLESS: "1",
+        VC_TEST_MODE: "1",
+      },
+    },
+  );
+  expect(stderr).not.toMatch(/ReferenceError|__name|page\.evaluate/);
+  expect(JSON.parse(stdout.trim())).toEqual({
+    fillCount: 1,
+    stable: "stable",
+    historyCount: 1,
+    saveLinkedToFill: true,
+    hostFormName: "consultation-record",
+  });
+});
 
 test("Legacy DPI layout A survives same-path editor rerender, compiles and runs through Studio controls", async ({
   page,
@@ -328,6 +355,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       .getByRole("button", { name: "Run locally", exact: true })
       .click();
     await expect(page.locator("#studioState")).toHaveText("PASSED");
+    await expect(page.locator("#toast.error")).toBeHidden();
     await expect(
       controller.browser.mainPage
         .frameLocator('iframe[title="Éditeur de consultation"]')
@@ -359,6 +387,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
     });
     await page.getByRole("button", { name: "Run again", exact: true }).click();
     await expect(page.locator("#studioState")).toHaveText("PASSED");
+    await expect(page.locator("#toast.error")).toBeHidden();
     await expect(
       controller.browser.mainPage.locator(
         "[data-vc-consultation-history] > li",
@@ -772,6 +801,14 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
           `Persistence rejected ${demonstratedValue} at http://local.test/compile?record=${demonstratedValue}&mode=test token=raw-token cookie=raw-cookie Authorization=Bearer raw-auth`,
         );
       };
+      let delayNextStateRefresh = true;
+      await page.route("**/api/state", async (route) => {
+        if (delayNextStateRefresh) {
+          delayNextStateRefresh = false;
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+        }
+        await route.continue();
+      });
 
       const terminalMessages: string[] = [];
       const originalConsoleError = console.error;
@@ -782,6 +819,18 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
         await page
           .getByRole("button", { name: "Compile", exact: true })
           .click();
+        await expect(page.locator("#compilationDiagnostics")).toBeVisible({
+          timeout: 1_000,
+        });
+        await expect(
+          page.getByRole("button", {
+            name: "Copy diagnostics",
+            exact: true,
+          }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Clear", exact: true }),
+        ).toBeVisible();
         await expect(page.locator("#studioState")).toHaveText(
           "DEMONSTRATION_REVIEW",
         );
@@ -811,6 +860,8 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
       expect(message).not.toContain("raw-cookie");
       expect(message).not.toContain("raw-auth");
       await expect(page.locator("#toast.error")).toBeHidden();
+      await page.waitForTimeout(3_700);
+      await expect(page.locator("#compilationDiagnostics")).toBeVisible();
 
       await page.reload();
       await expect(page.locator("#compilationDiagnostics")).toBeVisible();
