@@ -1,0 +1,447 @@
+import { z } from "zod";
+
+export const BoundingBoxSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number().nonnegative(),
+  height: z.number().nonnegative(),
+});
+
+export const FrameIdentitySchema = z.object({
+  role: z.enum(["main", "same-origin", "cross-origin-opaque"]),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  origin: z.string(),
+  pathname: z.string(),
+  structuralFingerprint: z.string(),
+});
+
+export const DemonstratedTargetSchema = z.object({
+  fingerprint: z.string().min(8),
+  tag: z.string().min(1),
+  role: z.string().optional(),
+  accessibleName: z.string().optional(),
+  associatedLabel: z.string().optional(),
+  inputType: z.string().optional(),
+  editable: z.boolean(),
+  readonly: z.boolean(),
+  visible: z.boolean(),
+  enabled: z.boolean(),
+  formName: z.string().optional(),
+  semanticContainer: z
+    .object({
+      tag: z.string(),
+      heading: z.string().optional(),
+      landmark: z.string().optional(),
+      fingerprint: z.string(),
+    })
+    .optional(),
+  parent: z
+    .object({
+      tag: z.string(),
+      role: z.string().optional(),
+      accessibleName: z.string().optional(),
+    })
+    .optional(),
+  previousSibling: z.string().optional(),
+  nextSibling: z.string().optional(),
+  nearbyVisibleLabels: z.array(z.string()).max(8).default([]),
+  boundingBox: BoundingBoxSchema.optional(),
+  rowColumnEvidence: z
+    .array(
+      z.object({
+        relation: z.enum(["same-row", "same-column"]),
+        text: z.string(),
+      }),
+    )
+    .default([]),
+  frame: FrameIdentitySchema,
+  stableAttributes: z.record(z.string()).default({}),
+  unstableAttributes: z.array(z.string()).default([]),
+  structuralPath: z.string(),
+  beforeFingerprint: z.string().optional(),
+  afterFingerprint: z.string().optional(),
+  editorAdapter: z
+    .enum([
+      "playwright-fill",
+      "contenteditable",
+      "keyboard",
+      "same-origin-iframe",
+      "legacy-facade",
+      "native-value-setter",
+    ])
+    .optional(),
+  backingFieldSelector: z.string().optional(),
+  captureValidation: z.object({
+    exactTargetConnected: z.literal(true),
+    roleNameMatchCount: z.number().int().nonnegative(),
+    labelMatchCount: z.number().int().nonnegative(),
+    stableAttributeMatchCount: z.number().int().nonnegative(),
+  }),
+});
+
+export const RecordedPageContextSchema = z.object({
+  id: z.string(),
+  role: z.enum(["main", "popup", "tab", "frame"]),
+  parentId: z.string().optional(),
+  openerActionId: z.string().optional(),
+  origin: z.string(),
+  pathname: z.string(),
+  titlePattern: z.string().optional(),
+  structuralFingerprint: z.string(),
+  expectedLandmark: z.string().optional(),
+  pageRole: z.string(),
+  sameOriginInspectable: z.boolean().default(true),
+  status: z.enum(["open", "closed"]).default("open"),
+});
+
+export const PageContextGraphSchema = z.object({
+  rootId: z.string().optional(),
+  nodes: z.array(RecordedPageContextSchema),
+  edges: z.array(
+    z.object({
+      from: z.string(),
+      to: z.string(),
+      relation: z.enum(["opened", "contains-frame", "focus-return"]),
+      actionId: z.string().optional(),
+    }),
+  ),
+});
+
+export const ObservedEffectSchema = z.object({
+  type: z.enum([
+    "dom-change",
+    "navigation",
+    "popup-opened",
+    "popup-closed",
+    "dialog-opened",
+    "focus-moved",
+    "value-synchronized",
+    "success-visible",
+    "error-visible",
+  ]),
+  pageContextId: z.string().optional(),
+  fingerprint: z.string().optional(),
+  description: z.string(),
+});
+
+export const RecordedActionTypeSchema = z.enum([
+  "click",
+  "double-click",
+  "fill",
+  "select",
+  "check",
+  "uncheck",
+  "keyboard",
+  "submit",
+  "wait",
+  "dialog",
+  "navigation",
+  "popup-open",
+  "popup-close",
+  "focus",
+  "assert",
+]);
+
+export const RecordedActionSchema = z.object({
+  id: z.string(),
+  pageContextId: z.string(),
+  action: RecordedActionTypeSchema,
+  name: z.string(),
+  target: DemonstratedTargetSchema.optional(),
+  valueRef: z.string().optional(),
+  key: z.string().optional(),
+  dialog: z
+    .object({
+      type: z.enum(["alert", "confirm", "prompt", "beforeunload"]),
+      response: z.enum(["accepted", "dismissed"]),
+      promptValueRef: z.string().optional(),
+    })
+    .optional(),
+  observedEffects: z.array(ObservedEffectSchema),
+  timestampOffsetMs: z.number().nonnegative(),
+  optional: z.boolean().default(false),
+});
+
+export const WorkflowVariableSchema = z.object({
+  id: z.string(),
+  name: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  valueType: z.enum(["string", "number", "boolean", "option"]),
+  sourceActionId: z.string().optional(),
+  privacy: z.enum(["local-variable", "local-literal", "ai-instruction"]),
+  required: z.boolean().default(true),
+  description: z.string().optional(),
+});
+
+export const StructuralSnapshotSchema = z.object({
+  pageContextId: z.string(),
+  fingerprint: z.string(),
+  visibleLandmarks: z.array(z.string()),
+  capturedAt: z.string().datetime(),
+});
+
+export const DemonstrationSessionSchema = z.object({
+  id: z.string(),
+  startedAt: z.string().datetime(),
+  stoppedAt: z.string().datetime().optional(),
+  pages: z.array(RecordedPageContextSchema),
+  pageGraph: PageContextGraphSchema,
+  actions: z.array(RecordedActionSchema),
+  variables: z.array(WorkflowVariableSchema),
+  beforeState: StructuralSnapshotSchema.optional(),
+  afterState: StructuralSnapshotSchema.optional(),
+  authenticationExcluded: z.literal(true),
+});
+
+export const LocatorStrategySchema = z.enum([
+  "role-name",
+  "label-association",
+  "form-control-name",
+  "container-role-name",
+  "text-dom-relation",
+  "form-ownership",
+  "neighbor-label",
+  "same-row-column",
+  "stable-attribute",
+  "structural-fallback",
+  "bounding-box",
+  "absolute-coordinate",
+]);
+
+export const LocatorRuleSchema = z.object({
+  strategy: LocatorStrategySchema,
+  role: z.string().optional(),
+  name: z.string().optional(),
+  label: z.string().optional(),
+  formControlName: z.string().optional(),
+  containerHeading: z.string().optional(),
+  attribute: z.string().optional(),
+  attributeValue: z.string().optional(),
+  structuralPath: z.string().optional(),
+  frameTitle: z.string().optional(),
+});
+
+export const LocatorCandidateSchema = z.object({
+  id: z.string(),
+  strategy: LocatorStrategySchema,
+  rule: LocatorRuleSchema,
+  selectorPreview: z.string(),
+  matchCount: z.number().int().nonnegative(),
+  visibleCount: z.number().int().nonnegative(),
+  enabledCount: z.number().int().nonnegative(),
+  editableCount: z.number().int().nonnegative().optional(),
+  unique: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  stability: z.number().min(0).max(1),
+  explanation: z.string(),
+  fallbackOrder: z.number().int().nonnegative(),
+  demonstratedFingerprint: z.string(),
+});
+
+export const ConditionSchema = z.object({
+  type: z.enum([
+    "visible",
+    "enabled",
+    "editable",
+    "value-equals",
+    "text-visible",
+    "text-absent",
+    "page-open",
+    "page-closed",
+    "url-path",
+    "backing-field-synchronized",
+  ]),
+  expected: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  description: z.string(),
+});
+
+export const CompiledPageContextSchema = RecordedPageContextSchema.extend({
+  resolutionOrder: z.array(
+    z.enum([
+      "opener",
+      "origin-path",
+      "title",
+      "structural-fingerprint",
+      "landmark",
+      "page-role",
+    ]),
+  ),
+});
+
+export const CompiledStepSchema = z.object({
+  id: z.string(),
+  sourceActionId: z.string(),
+  pageContextId: z.string(),
+  action: RecordedActionTypeSchema,
+  name: z.string(),
+  target: DemonstratedTargetSchema.optional(),
+  locatorCandidates: z.array(LocatorCandidateSchema),
+  selectedLocatorId: z.string().optional(),
+  valueRef: z.string().optional(),
+  localLiteral: z.string().optional(),
+  key: z.string().optional(),
+  optional: z.boolean(),
+  preconditions: z.array(ConditionSchema),
+  postconditions: z.array(ConditionSchema),
+  expectsPopupContextId: z.string().optional(),
+  expectsPopupClosure: z.boolean().optional(),
+});
+
+export const LoopStopConditionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("no-next-eligible-item") }),
+  z.object({
+    type: z.literal("maximum-iterations"),
+    maximum: z.number().int().min(1).max(1000),
+  }),
+  z.object({
+    type: z.literal("maximum-duration-ms"),
+    maximum: z.number().int().min(1000).max(3_600_000),
+  }),
+  z.object({ type: z.literal("duplicate-fingerprint") }),
+  z.object({ type: z.literal("user-stop") }),
+]);
+
+export const CompiledLoopSchema = z.object({
+  id: z.string(),
+  collectionDescription: z.string(),
+  templatePageContextId: z.string(),
+  templateStepIds: z.array(z.string()).min(1),
+  templateRowFingerprint: z.string(),
+  nextItemRelationship: z.enum([
+    "next-sibling",
+    "next-row",
+    "next-matching-container",
+  ]),
+  eligibilityPredicate: z.string(),
+  stoppingConditions: z.array(LoopStopConditionSchema).min(4),
+  maximumIterations: z.number().int().min(1).max(1000).default(100),
+  maximumDurationMs: z.number().int().min(1000).max(3_600_000).default(600_000),
+  duplicateItemProtection: z.boolean().default(true),
+  errorPolicy: z.enum(["stop-first-required-failure", "continue-optional"]),
+});
+
+export const OutcomeEvidenceSchema = z.object({
+  type: z.enum([
+    "text-visible",
+    "element-visible",
+    "field-value",
+    "navigation",
+    "popup-closed",
+    "structural-marker",
+  ]),
+  pageContextId: z.string(),
+  target: z.string(),
+  expected: z.union([z.string(), z.boolean()]),
+  required: z.boolean().default(true),
+});
+
+export const ApplicationOutcomeSchema = z.object({
+  positiveEvidence: z.array(OutcomeEvidenceSchema).min(1),
+  negativeEvidence: z
+    .array(
+      z.object({
+        type: z.enum([
+          "error-text",
+          "error-marker",
+          "unexpected-origin",
+          "unexpected-popup",
+          "closed-main-page",
+          "unchanged-state",
+        ]),
+        target: z.string(),
+        description: z.string(),
+      }),
+    )
+    .min(1),
+  requireAllPositive: z.boolean().default(true),
+});
+
+export const CompilationDiagnosticSchema = z.object({
+  level: z.enum(["info", "warning", "error"]),
+  code: z.string(),
+  message: z.string(),
+  actionId: z.string().optional(),
+});
+
+export const CompiledWorkflowSchema = z.object({
+  schemaVersion: z.literal("2.0.0"),
+  id: z.string(),
+  version: z.string(),
+  sourceDemonstrationId: z.string(),
+  compileMode: z.enum([
+    "direct-demonstration",
+    "mock-ai-generalization",
+    "live-gpt-generalization",
+  ]),
+  pageContexts: z.array(CompiledPageContextSchema),
+  steps: z.array(CompiledStepSchema).min(1),
+  loops: z.array(CompiledLoopSchema).default([]),
+  variables: z.array(WorkflowVariableSchema),
+  expectedOutcome: ApplicationOutcomeSchema,
+  compilationMetadata: z.object({
+    compiledAt: z.string().datetime(),
+    promptVersion: z.string().optional(),
+    model: z.string().optional(),
+    modelCalls: z.number().int().nonnegative(),
+    payloadSha256: z.string().optional(),
+    diagnostics: z.array(CompilationDiagnosticSchema),
+    generatedPlaywright: z.string(),
+  }),
+});
+
+export const RuntimeStateSchema = z.enum([
+  "Ready",
+  "Running",
+  "Passed",
+  "Failed",
+  "Stopped",
+]);
+
+export const RuntimeTelemetrySchema = z.object({
+  workflowId: z.string(),
+  runId: z.string(),
+  mode: z.enum(["local", "animated"]),
+  state: RuntimeStateSchema,
+  startedAt: z.string().datetime(),
+  finishedAt: z.string().datetime().optional(),
+  llmCalls: z.literal(0),
+  openAIRequests: z.literal(0),
+  steps: z.array(
+    z.object({
+      stepId: z.string(),
+      pageContextId: z.string(),
+      action: RecordedActionTypeSchema,
+      status: z.enum(["passed", "failed", "stopped", "skipped"]),
+      durationMs: z.number().nonnegative(),
+      locatorStrategy: LocatorStrategySchema.optional(),
+      message: z.string(),
+    }),
+  ),
+  outcomeChecks: z.array(
+    z.object({
+      type: z.string(),
+      target: z.string(),
+      expected: z.union([z.string(), z.boolean()]),
+      actual: z.union([z.string(), z.boolean()]),
+      passed: z.boolean(),
+    }),
+  ),
+  redactedLog: z.array(z.string()),
+  error: z.string().optional(),
+});
+
+export type DemonstratedTarget = z.infer<typeof DemonstratedTargetSchema>;
+export type RecordedPageContext = z.infer<typeof RecordedPageContextSchema>;
+export type PageContextGraphData = z.infer<typeof PageContextGraphSchema>;
+export type ObservedEffect = z.infer<typeof ObservedEffectSchema>;
+export type RecordedAction = z.infer<typeof RecordedActionSchema>;
+export type WorkflowVariable = z.infer<typeof WorkflowVariableSchema>;
+export type DemonstrationSession = z.infer<typeof DemonstrationSessionSchema>;
+export type LocatorRule = z.infer<typeof LocatorRuleSchema>;
+export type LocatorCandidate = z.infer<typeof LocatorCandidateSchema>;
+export type CompiledPageContext = z.infer<typeof CompiledPageContextSchema>;
+export type CompiledStep = z.infer<typeof CompiledStepSchema>;
+export type CompiledLoop = z.infer<typeof CompiledLoopSchema>;
+export type ApplicationOutcome = z.infer<typeof ApplicationOutcomeSchema>;
+export type CompiledWorkflow = z.infer<typeof CompiledWorkflowSchema>;
+export type RuntimeTelemetry = z.infer<typeof RuntimeTelemetrySchema>;
