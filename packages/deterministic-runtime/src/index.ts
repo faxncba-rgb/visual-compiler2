@@ -1,4 +1,11 @@
-import type { BrowserContext, Dialog, Frame, Locator, Page } from "playwright";
+import type {
+  BrowserContext,
+  Dialog,
+  Frame,
+  Locator,
+  Page,
+  Route,
+} from "playwright";
 import {
   CompiledWorkflowSchema,
   RuntimeTelemetrySchema,
@@ -196,6 +203,9 @@ export class DeterministicRuntime {
     | undefined;
   #dialogCursor = 0;
   #routeInstalled = false;
+  #networkHandler: ((route: Route) => Promise<void>) | undefined;
+  #dialogHandler: ((dialog: Dialog) => Promise<void>) | undefined;
+  #pageDialogListener: ((page: Page) => void) | undefined;
 
   constructor(private readonly options: RuntimeOptions) {
     this.#workflow = CompiledWorkflowSchema.parse(options.workflow);
@@ -293,6 +303,7 @@ export class DeterministicRuntime {
       }
     } finally {
       telemetry.finishedAt = new Date().toISOString();
+      await this.#cleanupTransientHandlers();
     }
     return RuntimeTelemetrySchema.parse(telemetry);
   }
@@ -300,14 +311,15 @@ export class DeterministicRuntime {
   async #installNetworkGuard() {
     if (this.#routeInstalled) return;
     this.#routeInstalled = true;
-    await this.options.context.route("**/*", async (route) => {
+    this.#networkHandler = async (route) => {
       if (isOpenAIUrl(route.request().url())) {
         this.#blockedOpenAIAttempts += 1;
         await route.abort("blockedbyclient");
         return;
       }
       await route.fallback();
-    });
+    };
+    await this.options.context.route("**/*", this.#networkHandler);
     await this.options.context.routeWebSocket(
       (url) => isOpenAIUrl(url.toString()),
       async (webSocket) => {
@@ -334,8 +346,26 @@ export class DeterministicRuntime {
       if (response === "accepted") await dialog.accept();
       else await dialog.dismiss();
     };
+    this.#dialogHandler = handler;
+    this.#pageDialogListener = (page) => page.on("dialog", handler);
     for (const page of this.options.context.pages()) page.on("dialog", handler);
-    this.options.context.on("page", (page) => page.on("dialog", handler));
+    this.options.context.on("page", this.#pageDialogListener);
+  }
+
+  async #cleanupTransientHandlers() {
+    if (this.#dialogHandler) {
+      for (const page of this.options.context.pages()) {
+        page.off("dialog", this.#dialogHandler);
+      }
+    }
+    if (this.#pageDialogListener) {
+      this.options.context.off("page", this.#pageDialogListener);
+    }
+    if (this.#networkHandler) {
+      await this.options.context
+        .unroute("**/*", this.#networkHandler)
+        .catch(() => undefined);
+    }
   }
 
   async #resolveInitialContexts() {

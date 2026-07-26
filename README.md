@@ -14,6 +14,8 @@ The MVP intentionally targets the bundled synthetic DPI. It must not be used
 with real patient data, real credentials, or an environment the operator is not
 authorized to automate.
 
+![Visual Compiler 2 Lab Studio](docs/screenshots/studio-lab.png)
+
 ## Teach, compile, run
 
 ```mermaid

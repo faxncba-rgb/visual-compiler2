@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Teach browser workflows once and replay them locally without an LLM."
+    />
+    <title>Visual Compiler 2 · Lab Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="lab-banner" role="status">
+      LAB MODE — synthetic test records only
+    </div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">VC²</span>
+        <div>
+          <h1>Visual Compiler 2</h1>
+          <p>Teach once. Compile once. Run locally forever.</p>
+        </div>
+      </div>
+      <div class="status-ribbon" aria-label="System status">
+        <span class="status-chip"
+          >Studio <strong id="studioState">IDLE</strong></span
+        >
+        <span class="status-chip"
+          >Browser <strong id="browserStatus">CLOSED</strong></span
+        >
+        <span class="status-chip"
+          >Recorder <strong id="recorderStatus">OFF</strong></span
+        >
+        <span class="status-chip"
+          >Compiler <strong id="compilerStatus">WAITING</strong></span
+        >
+      </div>
+    </header>
+
+    <section class="metrics" aria-label="Model usage counters">
+      <article>
+        <span>Compile-time model calls</span>
+        <strong id="compileCalls">0</strong>
+      </article>
+      <article>
+        <span>Runtime LLM calls</span>
+        <strong id="runtimeLlmCalls">0</strong>
+      </article>
+      <article class="zero-proof">
+        <span>Runtime OpenAI requests</span>
+        <strong id="runtimeOpenAiRequests">0</strong>
+      </article>
+      <p>
+        Runtime is deterministic. Local replay does not import or contact
+        OpenAI.
+      </p>
+    </section>
+
+    <main class="studio-grid">
+      <aside class="panel browser-panel" aria-labelledby="browser-heading">
+        <div class="panel-heading">
+          <span class="eyebrow">Managed browser</span>
+          <h2 id="browser-heading">Authorized local surface</h2>
+        </div>
+
+        <label for="targetUrl">Synthetic application profile</label>
+        <select id="targetUrl">
+          <option value="http://127.0.0.1:4273/fixture?variant=A">
+            Legacy DPI · layout A
+          </option>
+          <option value="http://127.0.0.1:4273/fixture?variant=B">
+            Legacy DPI · layout B
+          </option>
+          <option
+            value="http://127.0.0.1:4273/fixture?variant=A&editor=contenteditable"
+          >
+            Contenteditable editor
+          </option>
+          <option value="http://127.0.0.1:4273/fixture?variant=A&editor=iframe">
+            Same-origin iframe editor
+          </option>
+          <option value="http://127.0.0.1:4273/fixture?variant=A&editor=facade">
+            Legacy editor facade
+          </option>
+          <option value="http://127.0.0.1:4273/fixture/popup-workflow">
+            Popup-centric workflow
+          </option>
+        </select>
+        <p class="privacy-note">
+          Live query parameters can guide the fixture but are removed from
+          artifacts and logs.
+        </p>
+
+        <div class="button-stack">
+          <button id="openBrowser" class="primary">Open managed browser</button>
+          <button id="authComplete">Authentication complete · ready</button>
+        </div>
+
+        <dl class="browser-facts">
+          <div>
+            <dt>Authentication</dt>
+            <dd>Manual only</dd>
+          </div>
+          <div>
+            <dt>Recording during login</dt>
+            <dd>Disabled</dd>
+          </div>
+          <div>
+            <dt>Canonical page</dt>
+            <dd id="canonicalPage">—</dd>
+          </div>
+        </dl>
+
+        <div class="subheading">
+          <h3>Page Context Graph</h3>
+          <span id="pageCount">0 contexts</span>
+        </div>
+        <ol id="pageGraph" class="page-graph">
+          <li class="empty">Open the managed browser to discover contexts.</li>
+        </ol>
+      </aside>
+
+      <section class="panel teach-panel" aria-labelledby="teach-heading">
+        <div class="panel-heading split">
+          <div>
+            <span class="eyebrow">Teach</span>
+            <h2 id="teach-heading">Demonstration timeline</h2>
+          </div>
+          <span id="recordingIndicator" class="recording-indicator">
+            Recorder idle
+          </span>
+        </div>
+
+        <div class="teach-actions">
+          <button id="startTeaching" class="primary">Start teaching</button>
+          <button id="stopTeaching" class="danger">Stop teaching</button>
+          <button id="rerecord">Re-record</button>
+        </div>
+
+        <ol id="timeline" class="timeline">
+          <li class="empty">
+            Authenticate, navigate to the synthetic record, then start teaching.
+          </li>
+        </ol>
+
+        <section class="variables-section" aria-labelledby="variables-heading">
+          <div class="subheading">
+            <div>
+              <h3 id="variables-heading">Local runtime variables</h3>
+              <p>Remain local and are not sent to AI by default.</p>
+            </div>
+          </div>
+          <div id="variables" class="variable-list">
+            <p class="empty">Typed demonstration values will appear here.</p>
+          </div>
+        </section>
+
+        <section
+          class="generalization"
+          aria-labelledby="generalization-heading"
+        >
+          <span class="eyebrow ai">Optional compile-time AI boundary</span>
+          <h3 id="generalization-heading">AI generalization instructions</h3>
+          <p>
+            Only this instruction and the redacted structural preview below are
+            intentionally presented to the mocked compiler.
+          </p>
+          <label for="generalizationInstruction">Instruction</label>
+          <textarea
+            id="generalizationInstruction"
+            placeholder="Example: Repeat the demonstrated actions on each following eligible row until no eligible row remains."
+          ></textarea>
+          <div class="compile-row">
+            <span id="compileMode" class="mode-pill"
+              >direct-demonstration compiler</span
+            >
+            <button id="compile" class="compile-button">Compile</button>
+          </div>
+          <details>
+            <summary>Payload sent to AI · redacted preview</summary>
+            <pre id="payloadPreview">No payload prepared.</pre>
+          </details>
+        </section>
+      </section>
+
+      <aside class="panel workflow-panel" aria-labelledby="workflow-heading">
+        <div class="panel-heading">
+          <span class="eyebrow">Workflow</span>
+          <h2 id="workflow-heading">Evidence & artifact</h2>
+        </div>
+        <nav class="tabs" aria-label="Workflow details">
+          <button class="tab active" data-tab="demonstration">
+            Demonstration
+          </button>
+          <button class="tab" data-tab="compiled">Compiled</button>
+          <button class="tab" data-tab="locators">Locators</button>
+          <button class="tab" data-tab="generated">Generated</button>
+          <button class="tab" data-tab="runtime">Runtime log</button>
+        </nav>
+        <section class="tab-panel active" data-panel="demonstration">
+          <pre id="demonstrationJson">No demonstration recorded.</pre>
+        </section>
+        <section class="tab-panel" data-panel="compiled">
+          <pre id="compiledJson">No workflow compiled.</pre>
+        </section>
+        <section class="tab-panel" data-panel="locators">
+          <div id="locatorCards" class="locator-cards">
+            <p class="empty">Locator candidates appear after compilation.</p>
+          </div>
+        </section>
+        <section class="tab-panel" data-panel="generated">
+          <pre id="generatedCode">No deterministic outline generated.</pre>
+        </section>
+        <section class="tab-panel" data-panel="runtime">
+          <pre id="runtimeLog">No local run yet.</pre>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="execution-dock" aria-label="Workflow execution">
+      <div>
+        <span class="eyebrow">Compiled artifact execution</span>
+        <strong id="runtimeState">Ready when compiled</strong>
+        <small>Lab Mode defaults to fast local replay.</small>
+      </div>
+      <div class="execution-actions">
+        <button id="animatedRun" class="animated">1st run — animated</button>
+        <button id="localRun" class="primary">Run locally</button>
+        <button id="runAgain">Run again</button>
+        <button id="stopAll" class="danger">Stop</button>
+        <button id="reset">Reset</button>
+      </div>
+    </footer>
+
+    <div id="toast" role="alert" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

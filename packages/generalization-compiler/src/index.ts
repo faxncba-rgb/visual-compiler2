@@ -422,6 +422,28 @@ function compileLoops(
   });
 }
 
+function generatedLocator(
+  candidate: CompiledStep["locatorCandidates"][number],
+) {
+  const rule = candidate.rule;
+  const root = rule.frameTitle
+    ? `page.frameLocator('iframe[title=${JSON.stringify(rule.frameTitle)}]')`
+    : "page";
+  if (rule.strategy === "role-name")
+    return `${root}.getByRole(${JSON.stringify(rule.role)}, { name: ${JSON.stringify(rule.name)}, exact: true })`;
+  if (rule.strategy === "label-association")
+    return `${root}.getByLabel(${JSON.stringify(rule.label)}, { exact: true })`;
+  if (rule.strategy === "form-control-name")
+    return `${root}.locator(${JSON.stringify(`[name="${rule.formControlName}"]`)})`;
+  if (rule.strategy === "stable-attribute")
+    return `${root}.locator(${JSON.stringify(`[${rule.attribute}="${rule.attributeValue}"]`)})`;
+  if (rule.strategy === "container-role-name") {
+    const container = `${root}.locator('section,form,article,[role=dialog],[role=region]').filter({ has: ${root}.getByRole('heading', { name: ${JSON.stringify(rule.containerHeading)}, exact: true }) })`;
+    return `${container}.getByRole(${JSON.stringify(rule.role)}, { name: ${JSON.stringify(rule.name)}, exact: true })`;
+  }
+  return `${root}.locator(${JSON.stringify(rule.structuralPath ?? candidate.selectorPreview)})`;
+}
+
 function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
   const lines = [
     `// Generated deterministic outline for ${workflowId}.`,
@@ -434,10 +456,18 @@ function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
     );
     if (step.action === "fill" && selected) {
       lines.push(
-        `  await ${selected.selectorPreview}.fill(variables.${step.valueRef?.slice(2, -2) ?? "value"});`,
+        `  await ${generatedLocator(selected)}.fill(variables.${step.valueRef?.slice(2, -2) ?? "value"});`,
       );
     } else if (step.action === "click" && selected) {
-      lines.push(`  await ${selected.selectorPreview}.click();`);
+      lines.push(`  await ${generatedLocator(selected)}.click();`);
+    } else if (step.action === "select" && selected) {
+      lines.push(
+        `  await ${generatedLocator(selected)}.selectOption(variables.${step.valueRef?.slice(2, -2) ?? "value"});`,
+      );
+    } else if (step.action === "check" && selected) {
+      lines.push(`  await ${generatedLocator(selected)}.check();`);
+    } else if (step.action === "uncheck" && selected) {
+      lines.push(`  await ${generatedLocator(selected)}.uncheck();`);
     } else {
       lines.push(`  // ${step.action}: ${step.name}`);
     }

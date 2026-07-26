@@ -4,4 +4,10 @@
 
 - Establish demonstration-first TypeScript monorepo and local Lab Mode
   architecture.
+- Add a real persistent managed browser recorder with page/frame/popup graph.
+- Add direct and mocked-generalization compilers with validated Zod IR.
+- Add zero-LLM deterministic local/animated runtime, positive outcomes, Stop,
+  and Run again.
+- Add synthetic legacy DPI variants, editor adapters, popup/dialog fixtures,
+  Studio UI, security controls, CI, and full test coverage.
 - Document compile-time/runtime isolation and migration lessons.

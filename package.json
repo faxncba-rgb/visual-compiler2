@@ -9,12 +9,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "tsx scripts/dev.ts",
+    "dev": "node --import tsx scripts/dev.ts",
     "build": "tsc --noEmit",
     "test": "vitest run --exclude tests/security/**",
     "test:watch": "vitest",
     "test:security": "vitest run tests/security",
     "test:e2e": "playwright test",
+    "screenshot:studio": "node --import tsx scripts/capture-studio.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint ."
