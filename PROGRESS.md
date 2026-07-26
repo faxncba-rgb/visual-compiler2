@@ -2,14 +2,15 @@
 
 ## Current milestone
 
-Milestone 15.5 — explicit copy/paste dataflow.
+Milestone 15.6 — minimal immutable Workflow Library.
 
 ## Milestone objective
 
-- Record a copy gesture as `extract` from a demonstrated source locator.
-- Bind the next paste edit to an ephemeral memory-only runtime variable.
-- Replay cross-page transfer without using the OS clipboard as runtime data
-  transport or persisting copied content.
+- Add only the permitted workflow name, saved-workflow selector and passive
+  status.
+- Auto-save a named workflow after successful Compile with immutable versions.
+- Reload and run a selected workflow after Studio restart, including compatible
+  legacy artifacts.
 
 ## Milestone 15.1 finding
 
@@ -118,6 +119,32 @@ Milestone 15.5 — explicit copy/paste dataflow.
 - Copy/paste recognition depends on observable browser copy/paste events; sites
   that fully virtualize these gestures without DOM events remain unsupported.
 - The minimal immutable Workflow Library is next.
+
+## Milestone 15.6 implementation
+
+- Added a local versioned library bundle and metadata index under
+  `local-data/workflow-library`, written with private file permissions.
+- Compile with a non-empty name now creates a new immutable version; selecting
+  an entry loads its workflow and legacy local values into READY_TO_RUN.
+- Index metadata tracks canonical origins/paths, verification, checksum and
+  last-run status without storing authentication or runtime-copied content.
+- Added the only new visible controls: Workflow name, Saved workflows and a
+  passive status line. No management button was added.
+- Compatible JSON artifacts in `compiled-workflows` remain discoverable as
+  read-only legacy entries.
+
+## Milestone 15.6 validation
+
+- TypeScript build: passed.
+- Workflow Library E2E: named v1 auto-save, immutable v2, unchanged v1 bytes,
+  dropdown listing, restart discovery, v1 literal restoration, local replay,
+  last-run update and compatible legacy discovery all passed.
+
+## Remaining after Milestone 15.6
+
+- Library names are local metadata and reject obvious sensitive credential
+  terms; operators must still avoid naming workflows after real patients.
+- Automatic redacted Teaching traces remain to be implemented.
 
 ## Completed
 

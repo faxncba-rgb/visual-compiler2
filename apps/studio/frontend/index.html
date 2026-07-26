@@ -164,6 +164,22 @@
           <div id="demonstrationSummary" class="summary-box">
             Stop teaching to prepare a demonstration.
           </div>
+          <div class="workflow-library">
+            <label for="workflowName">Workflow name</label>
+            <input
+              id="workflowName"
+              maxlength="100"
+              autocomplete="off"
+              placeholder="Optional name for automatic local saving"
+            />
+            <label for="savedWorkflows">Saved workflows</label>
+            <select id="savedWorkflows">
+              <option value="">Select a saved workflow</option>
+            </select>
+            <p id="workflowLibraryStatus" class="supporting">
+              No saved workflows yet.
+            </p>
+          </div>
           <details id="optionalAiDetails" class="optional-ai">
             <summary>Optional AI generalization</summary>
             <p>

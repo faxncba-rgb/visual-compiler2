@@ -466,6 +466,18 @@ textarea {
   justify-content: space-between;
 }
 
+.workflow-library {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 10px;
+  margin: 14px 0;
+}
+
+.workflow-library .supporting {
+  grid-column: 1 / -1;
+  margin: 7px 0 0;
+}
+
 .mode-pill {
   padding: 7px 10px;
   border-radius: 999px;

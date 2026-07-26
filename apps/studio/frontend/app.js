@@ -181,6 +181,14 @@ function renderVariables(variables = [], values = {}) {
     const row = document.createElement("div");
     row.className = "variable-row";
     const name = textElement("code", "", `{{${variable.name}}}`);
+    if (variable.privacy === "runtime-derived") {
+      row.append(
+        name,
+        textElement("span", "privacy-pill", "Runtime memory only"),
+      );
+      container.append(row);
+      continue;
+    }
     const input = document.createElement("input");
     input.value = values?.[variable.name] ?? "";
     input.setAttribute("aria-label", `${variable.name} local value`);
@@ -278,6 +286,26 @@ function renderLocators(workflow) {
   }
 }
 
+function renderWorkflowLibrary(library = {}) {
+  const name = $("#workflowName");
+  if (document.activeElement !== name) name.value = library.name ?? "";
+  const select = $("#savedWorkflows");
+  const selected = library.selectedId ?? "";
+  select.replaceChildren(
+    new Option("Select a saved workflow", ""),
+    ...(library.entries ?? []).map(
+      (entry) =>
+        new Option(
+          `${entry.name} · v${entry.version}${entry.lastRunStatus ? ` · ${entry.lastRunStatus}` : ""}`,
+          entry.id,
+        ),
+    ),
+  );
+  select.value = selected;
+  $("#workflowLibraryStatus").textContent =
+    library.status ?? "No saved workflows yet.";
+}
+
 function executableActionCount(session) {
   return (
     session?.actions?.filter(
@@ -292,6 +320,7 @@ function executableActionCount(session) {
           "uncheck",
           "keyboard",
           "submit",
+          "extract",
         ].includes(action.action),
     ).length ?? 0
   );
@@ -400,6 +429,7 @@ function render() {
   renderTimeline(state.session?.actions ?? []);
   renderGraph(state.session?.pageGraph?.nodes ?? []);
   renderVariables(state.session?.variables ?? [], state.localRuntimeVariables);
+  renderWorkflowLibrary(state.workflowLibrary);
   renderOutcomes(state.session);
   renderLocators(state.workflow);
   renderDiagnostic(diagnostic);
@@ -465,15 +495,13 @@ async function mutate(path, body, successMessage, method = "POST") {
 
 async function compileWorkflow() {
   requestInFlight = true;
-  if (state) {
-    state.diagnostic = undefined;
-    state.compilationDiagnostic = undefined;
-  }
-  renderDiagnostic(undefined);
   renderButtons();
   try {
     state = await api("/api/compile", {
-      body: { instruction: $("#generalizationInstruction").value },
+      body: {
+        instruction: $("#generalizationInstruction").value,
+        workflowName: $("#workflowName").value,
+      },
     });
     render();
     toast("Local artifact compiled and ready to run.");
@@ -536,6 +564,15 @@ $("#restoreLastDemonstration").addEventListener("click", () => {
   );
 });
 $("#compile").addEventListener("click", () => void compileWorkflow());
+$("#savedWorkflows").addEventListener("change", () => {
+  const id = $("#savedWorkflows").value;
+  if (!id) return;
+  void mutate(
+    "/api/workflows/select",
+    { id },
+    "Saved workflow loaded and ready to run.",
+  );
+});
 $("#localRun").addEventListener("click", () => void run("local"));
 $("#animatedRun").addEventListener("click", () => void run("animated"));
 $("#runAgain").addEventListener("click", () => void run(lastRunMode));

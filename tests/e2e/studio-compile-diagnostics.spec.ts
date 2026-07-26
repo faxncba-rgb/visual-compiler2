@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -38,7 +38,7 @@ async function withIsolatedStudio(
   process.env.VC_HEADLESS = "1";
   const controller = new StudioController(rootDirectory, {
     testMode: true,
-    targetUrl: "http://127.0.0.1:4273/fixture?variant=A",
+    targetUrl: `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture?variant=A`,
   });
   const server = createStudioServer(controller);
   try {
@@ -399,6 +399,120 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       page.getByRole("button", { name: "Run again", exact: true }),
     ).toBeEnabled();
   });
+});
+
+test("Workflow Library auto-saves immutable versions, reloads after restart and reads legacy artifacts", async ({
+  page,
+}) => {
+  await withIsolatedStudio(
+    async ({ controller, rootDirectory, studioOrigin }) => {
+      const workflowName = "Synthetic consultation workflow";
+      const firstValue = "SYNTHETIC-LIBRARY-LITERAL-V1";
+      await teachLegacyLayoutA(
+        page,
+        controller,
+        studioOrigin,
+        firstValue,
+      );
+      await page
+        .getByLabel("Workflow name", { exact: true })
+        .fill(workflowName);
+      await page
+        .getByRole("button", { name: "Compile", exact: true })
+        .click();
+      await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+      await expect(
+        page.getByLabel("Saved workflows", { exact: true }),
+      ).toContainText(`${workflowName} · v1`);
+      const versionOne = controller.workflowLibraryEntries.find(
+        (entry) => entry.name === workflowName && entry.version === 1,
+      );
+      expect(versionOne?.legacy).toBe(false);
+      const versionOneArtifact = await readFile(
+        path.join(
+          rootDirectory,
+          "local-data",
+          "workflow-library",
+          versionOne!.artifactFile!,
+        ),
+        "utf8",
+      );
+      expect(versionOneArtifact).toContain(firstValue);
+
+      await controller.resetSyntheticFixture();
+      await controller.startTeaching();
+      const secondValue = "SYNTHETIC-LIBRARY-LITERAL-V2";
+      const managedPage = controller.browser.mainPage;
+      const editor = managedPage
+        .frameLocator('iframe[title="Éditeur de consultation"]')
+        .getByLabel("Texte de consultation", { exact: true });
+      await editor.fill(secondValue);
+      await managedPage.getByText("Enregistrer", { exact: true }).click();
+      await managedPage
+        .getByText("Consultation synthétique enregistrée.")
+        .waitFor();
+      await controller.stopTeaching();
+      await controller.compile("", workflowName);
+
+      const versions = controller.workflowLibraryEntries
+        .filter((entry) => entry.name === workflowName)
+        .map((entry) => entry.version)
+        .sort();
+      expect(versions).toEqual([1, 2]);
+      expect(versionOneArtifact).toBe(
+        await readFile(
+          path.join(
+            rootDirectory,
+            "local-data",
+            "workflow-library",
+            versionOne!.artifactFile!,
+          ),
+          "utf8",
+        ),
+      );
+
+      const legacyWorkflow = {
+        ...structuredClone(controller.workflow!),
+        id: "workflow-legacy-compatible",
+      };
+      await writeFile(
+        path.join(
+          rootDirectory,
+          "compiled-workflows",
+          "workflow-legacy-compatible.json",
+        ),
+        `${JSON.stringify(legacyWorkflow, null, 2)}\n`,
+      );
+      await controller.browser.close();
+
+      const restarted = new StudioController(rootDirectory, {
+        testMode: true,
+        targetUrl: `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture?variant=A`,
+      });
+      const restartedServer = createStudioServer(restarted);
+      try {
+        await listenOnEphemeralPort(restartedServer);
+        await restarted.initialize();
+        expect(
+          restarted.workflowLibraryEntries.some(
+            (entry) => entry.workflowId === "workflow-legacy-compatible",
+          ),
+        ).toBe(true);
+        const restoredVersionOne = restarted.workflowLibraryEntries.find(
+          (entry) => entry.name === workflowName && entry.version === 1,
+        )!;
+        await restarted.selectWorkflow(restoredVersionOne.id);
+        expect(JSON.stringify(restarted.workflow)).toContain(firstValue);
+        const telemetry = await restarted.run("local");
+        expect(telemetry.state, telemetry.error).toBe("Passed");
+        expect(telemetry.llmCalls).toBe(0);
+        expect(telemetry.openAIRequests).toBe(0);
+        expect(restoredVersionOne.lastRunStatus).toBe("Passed");
+      } finally {
+        await closeStudioServer(restartedServer, restarted);
+      }
+    },
+  );
 });
 
 test("fill without Enregistrer compiles and runs as COMPLETED_UNVERIFIED", async ({

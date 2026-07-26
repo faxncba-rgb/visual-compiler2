@@ -4,7 +4,13 @@ import {
   type ServerResponse,
 } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, readFile, mkdir, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  readFile,
+  readdir,
+  mkdir,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ManagedBrowser } from "../../../../packages/managed-browser/src";
@@ -34,6 +40,7 @@ import {
   canonicalizeUrl,
   createId,
   redactObject,
+  sha256,
 } from "../../../../packages/shared/src";
 import {
   assertNoLocalValuesInSession,
@@ -60,6 +67,29 @@ type LastDemonstrationMetadata = {
   authenticationPersisted: false;
   queryParametersPersisted: false;
   valuesStoredSeparately: true;
+};
+
+type WorkflowLibraryEntry = {
+  id: string;
+  workflowId: string;
+  name: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  origins: string[];
+  pathPatterns: string[];
+  actionCount: number;
+  verification: CompiledWorkflow["expectedOutcome"]["verification"];
+  artifactChecksum: string;
+  artifactFile?: string;
+  legacy: boolean;
+  lastRunStatus?: RuntimeTelemetry["state"];
+  lastRunAt?: string;
+};
+
+type WorkflowLibraryIndex = {
+  schemaVersion: 1;
+  entries: WorkflowLibraryEntry[];
 };
 
 export type StudioControllerOptions = {
@@ -217,10 +247,15 @@ export class StudioController {
   readonly studioEventLog: StudioCompilationDiagnostic[] = [];
   localValues: LocalVariableValues = {};
   generalizationInstruction = "";
+  workflowName = "";
+  selectedWorkflowId: string | undefined;
+  workflowLibraryStatus = "No saved workflows yet.";
+  readonly workflowLibraryEntries: WorkflowLibraryEntry[] = [];
   readonly testMode: boolean;
   readonly targetUrl: string;
   #abortController: AbortController | undefined;
   #mutation: "compile" | "run" | undefined;
+  #workflowLibraryLoaded = false;
 
   constructor(
     private readonly rootDirectory = process.cwd(),
@@ -238,6 +273,154 @@ export class StudioController {
 
   #lastDemonstrationDirectory() {
     return path.join(this.rootDirectory, "local-data", "last-demonstration");
+  }
+
+  #workflowLibraryDirectory() {
+    return path.join(this.rootDirectory, "local-data", "workflow-library");
+  }
+
+  #workflowLibraryIndexPath() {
+    return path.join(this.#workflowLibraryDirectory(), "index.json");
+  }
+
+  async #writeWorkflowLibraryIndex() {
+    const directory = this.#workflowLibraryDirectory();
+    await mkdir(directory, { recursive: true });
+    const index: WorkflowLibraryIndex = {
+      schemaVersion: 1,
+      entries: this.workflowLibraryEntries,
+    };
+    await writeFile(
+      this.#workflowLibraryIndexPath(),
+      `${JSON.stringify(index, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+  }
+
+  async #loadWorkflowLibrary() {
+    if (this.#workflowLibraryLoaded) return;
+    this.#workflowLibraryLoaded = true;
+    this.workflowLibraryEntries.length = 0;
+    if (existsSync(this.#workflowLibraryIndexPath())) {
+      try {
+        const stored = JSON.parse(
+          await readFile(this.#workflowLibraryIndexPath(), "utf8"),
+        ) as WorkflowLibraryIndex;
+        if (stored.schemaVersion === 1 && Array.isArray(stored.entries))
+          this.workflowLibraryEntries.push(...stored.entries);
+      } catch {
+        this.workflowLibraryStatus =
+          "Saved workflow index could not be read.";
+      }
+    }
+    const legacyDirectory = path.join(
+      this.rootDirectory,
+      "compiled-workflows",
+    );
+    if (existsSync(legacyDirectory)) {
+      for (const filename of await readdir(legacyDirectory)) {
+        if (!filename.endsWith(".json")) continue;
+        try {
+          const workflow = CompiledWorkflowSchema.parse(
+            JSON.parse(await readFile(path.join(legacyDirectory, filename), "utf8")),
+          );
+          if (
+            this.workflowLibraryEntries.some(
+              (entry) => entry.workflowId === workflow.id,
+            )
+          )
+            continue;
+          const serialized = JSON.stringify(workflow);
+          this.workflowLibraryEntries.push({
+            id: `legacy-${workflow.id}`,
+            workflowId: workflow.id,
+            name: `Legacy ${workflow.id.slice(0, 12)}`,
+            version: 1,
+            createdAt: workflow.compilationMetadata.compiledAt,
+            updatedAt: workflow.compilationMetadata.compiledAt,
+            origins: [...new Set(workflow.pageContexts.map((entry) => entry.origin))],
+            pathPatterns: [
+              ...new Set(workflow.pageContexts.map((entry) => entry.pathname)),
+            ],
+            actionCount: workflow.steps.length,
+            verification: workflow.expectedOutcome.verification,
+            artifactChecksum: sha256(serialized),
+            legacy: true,
+          });
+        } catch {
+          // Invalid legacy files are ignored without deleting local artifacts.
+        }
+      }
+    }
+    this.workflowLibraryEntries.sort((left, right) =>
+      right.createdAt.localeCompare(left.createdAt),
+    );
+    this.workflowLibraryStatus =
+      this.workflowLibraryEntries.length > 0
+        ? `${this.workflowLibraryEntries.length} saved workflow version${this.workflowLibraryEntries.length === 1 ? "" : "s"} available.`
+        : "No saved workflows yet.";
+  }
+
+  #normalizeWorkflowName(value: unknown) {
+    if (typeof value !== "string") return "";
+    const name = value.replaceAll(/\s+/g, " ").trim();
+    if (name.length > 100)
+      throw new Error("Workflow name must not exceed 100 characters.");
+    if (/password|passcode|token|secret|cookie|authorization|api[-_ ]?key/i.test(name))
+      throw new Error("Workflow name contains a forbidden sensitive term.");
+    return name;
+  }
+
+  async #saveNamedWorkflow(name: string) {
+    if (!this.workflow) return;
+    const normalized = name.toLocaleLowerCase();
+    const version =
+      Math.max(
+        0,
+        ...this.workflowLibraryEntries
+          .filter((entry) => entry.name.toLocaleLowerCase() === normalized)
+          .map((entry) => entry.version),
+      ) + 1;
+    const now = new Date().toISOString();
+    const id = createId("saved-workflow");
+    const artifactFile = `${id}.json`;
+    const bundle = {
+      schemaVersion: 1,
+      workflow: CompiledWorkflowSchema.parse(this.workflow),
+      variables: LocalVariableValuesSchema.parse(this.localValues),
+    };
+    const serialized = JSON.stringify(bundle);
+    const entry: WorkflowLibraryEntry = {
+      id,
+      workflowId: this.workflow.id,
+      name,
+      version,
+      createdAt: now,
+      updatedAt: now,
+      origins: [
+        ...new Set(this.workflow.pageContexts.map((context) => context.origin)),
+      ],
+      pathPatterns: [
+        ...new Set(
+          this.workflow.pageContexts.map((context) => context.pathname),
+        ),
+      ],
+      actionCount: this.workflow.steps.length,
+      verification: this.workflow.expectedOutcome.verification,
+      artifactChecksum: sha256(serialized),
+      artifactFile,
+      legacy: false,
+    };
+    const directory = this.#workflowLibraryDirectory();
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, artifactFile), `${serialized}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    this.workflowLibraryEntries.unshift(entry);
+    this.selectedWorkflowId = entry.id;
+    this.workflowLibraryStatus = `Saved locally · ${name} · version ${version}`;
+    await this.#writeWorkflowLibraryIndex();
   }
 
   #readLastDemonstrationMetadata() {
@@ -379,6 +562,12 @@ export class StudioController {
       compilationDiagnostic: this.compilationDiagnostic,
       studioEventLog: this.studioEventLog,
       lastDemonstration: this.#lastDemonstrationStatus(),
+      workflowLibrary: {
+        name: this.workflowName,
+        selectedId: this.selectedWorkflowId,
+        status: this.workflowLibraryStatus,
+        entries: this.workflowLibraryEntries,
+      },
       metrics: {
         compileTimeModelCalls:
           this.workflow?.compilationMetadata.modelCalls ?? 0,
@@ -395,6 +584,7 @@ export class StudioController {
   }
 
   async initialize() {
+    await this.#loadWorkflowLibrary();
     if (this.browser.status().open) return this.snapshot();
     try {
       await this.browser.open(this.targetUrl);
@@ -652,8 +842,7 @@ export class StudioController {
     return this.aiPayload;
   }
 
-  async compile(instruction: unknown) {
-    this.compilationDiagnostic = undefined;
+  async compile(instruction: unknown, workflowName?: unknown) {
     if (this.#mutation)
       throw new Error(`A ${this.#mutation} request is already active.`);
     if (this.machine.state !== "DEMONSTRATION_REVIEW")
@@ -669,6 +858,7 @@ export class StudioController {
     try {
       this.generalizationInstruction =
         typeof instruction === "string" ? instruction.trim() : "";
+      this.workflowName = this.#normalizeWorkflowName(workflowName);
       stage = "locator-validation";
       const result = await compileDemonstration({
         session: this.session,
@@ -680,8 +870,10 @@ export class StudioController {
       this.aiPayload = result.aiPayload;
       stage = "artifact-persistence";
       await this.persistArtifacts();
+      if (this.workflowName) await this.#saveNamedWorkflow(this.workflowName);
       stage = "state-transition";
       this.machine.compileReady();
+      this.compilationDiagnostic = undefined;
       await this.persistRecoverableState();
       return this.workflow;
     } catch (error) {
@@ -815,6 +1007,72 @@ export class StudioController {
     await this.browser.navigate(this.targetUrl);
   }
 
+  async selectWorkflow(value: unknown) {
+    await this.#loadWorkflowLibrary();
+    if (["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state))
+      throw new Error("Stop the active operation before loading a workflow.");
+    if (typeof value !== "string")
+      throw new Error("A saved workflow selection is required.");
+    const entry = this.workflowLibraryEntries.find(
+      (candidate) => candidate.id === value,
+    );
+    if (!entry) throw new Error("Saved workflow was not found.");
+    let workflow: CompiledWorkflow;
+    let variables: LocalVariableValues = {};
+    if (entry.legacy) {
+      workflow = CompiledWorkflowSchema.parse(
+        JSON.parse(
+          await readFile(
+            path.join(
+              this.rootDirectory,
+              "compiled-workflows",
+              `${entry.workflowId}.json`,
+            ),
+            "utf8",
+          ),
+        ),
+      );
+      const legacyVariables = path.join(
+        this.rootDirectory,
+        "local-data",
+        "variables",
+        `${entry.workflowId}.json`,
+      );
+      if (existsSync(legacyVariables))
+        variables = LocalVariableValuesSchema.parse(
+          JSON.parse(await readFile(legacyVariables, "utf8")),
+        );
+    } else {
+      if (!entry.artifactFile)
+        throw new Error("Saved workflow artifact is unavailable.");
+      const bundle = JSON.parse(
+        await readFile(
+          path.join(this.#workflowLibraryDirectory(), entry.artifactFile),
+          "utf8",
+        ),
+      ) as { workflow: unknown; variables?: unknown };
+      workflow = CompiledWorkflowSchema.parse(bundle.workflow);
+      variables = LocalVariableValuesSchema.parse(bundle.variables ?? {});
+    }
+    this.workflow = workflow;
+    this.localValues = variables;
+    this.workflowName = entry.name;
+    this.selectedWorkflowId = entry.id;
+    this.session = undefined;
+    this.telemetry = undefined;
+    this.aiPayload = undefined;
+    this.machine.reset();
+    if (!this.browser.status().open)
+      throw new Error("Open the managed browser before loading a workflow.");
+    this.machine.transition("BROWSER_OPEN");
+    this.machine.transition("READY_TO_TEACH");
+    this.machine.transition("READY_TO_RUN");
+    this.compilationDiagnostic = undefined;
+    this.workflowLibraryStatus = `Loaded · ${entry.name} · version ${entry.version}`;
+    await this.persistRecoverableState();
+    return workflow;
+  }
+
   async run(mode: unknown) {
     if (this.#mutation)
       throw new Error(`A ${this.#mutation} request is already active.`);
@@ -863,6 +1121,20 @@ export class StudioController {
           "runtime-execution",
         );
       }
+      if (this.selectedWorkflowId) {
+        const entry = this.workflowLibraryEntries.find(
+          (candidate) => candidate.id === this.selectedWorkflowId,
+        );
+        if (entry) {
+          entry.lastRunStatus = this.telemetry.state;
+          entry.lastRunAt = new Date().toISOString();
+          entry.updatedAt = entry.lastRunAt;
+          this.workflowLibraryStatus = `Last run ${this.telemetry.state.toLowerCase()} · ${entry.name} · version ${entry.version}`;
+          await this.#writeWorkflowLibraryIndex();
+        }
+      }
+      if (this.telemetry.state !== "Failed")
+        this.compilationDiagnostic = undefined;
       await this.persistRecoverableState();
       return this.telemetry;
     } finally {
@@ -894,6 +1166,8 @@ export class StudioController {
     this.aiPayload = undefined;
     this.localValues = {};
     this.generalizationInstruction = "";
+    this.workflowName = "";
+    this.selectedWorkflowId = undefined;
     this.machine.reset();
     if (this.browser.status().open) {
       this.machine.transition("BROWSER_OPEN");
@@ -1052,7 +1326,15 @@ export function createStudioServer(controller = new StudioController()) {
       }
       if (request.method === "POST" && url.pathname === "/api/compile") {
         const body = await readJson(request);
-        await controller.compile(body.instruction);
+        await controller.compile(body.instruction, body.workflowName);
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/workflows/select"
+      ) {
+        const body = await readJson(request);
+        await controller.selectWorkflow(body.id);
         return sendJson(response, 200, controller.snapshot());
       }
       if (
