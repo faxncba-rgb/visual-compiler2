@@ -2,15 +2,14 @@
 
 ## Current milestone
 
-Milestone 15.6 — minimal immutable Workflow Library.
+Milestone 15.7 — automatic forensic Teaching trace.
 
 ## Milestone objective
 
-- Add only the permitted workflow name, saved-workflow selector and passive
-  status.
-- Auto-save a named workflow after successful Compile with immutable versions.
-- Reload and run a selected workflow after Studio restart, including compatible
-  legacy artifacts.
+- Start and close a local structural trace with the normal Teaching lifecycle.
+- Keep typed/copied values, authentication and query parameters out of JSONL.
+- Reference the latest trace from persistent diagnostics when a demonstration
+  is missing or rejected.
 
 ## Milestone 15.1 finding
 
@@ -145,6 +144,32 @@ Milestone 15.6 — minimal immutable Workflow Library.
 - Library names are local metadata and reject obvious sensitive credential
   terms; operators must still avoid naming workflows after real patients.
 - Automatic redacted Teaching traces remain to be implemented.
+
+## Milestone 15.7 implementation
+
+- Added automatic Before/Action/After JSONL traces with timing, semantic target,
+  frame/page identity, reaction types and structural fingerprints.
+- Literal and runtime-derived values are represented only by their value kind;
+  contents, visible landmark text, authentication and query parameters are
+  excluded.
+- Synthetic automated fixtures receive private before/after screenshots; normal
+  managed-browser sessions persist metadata only.
+- Persistent diagnostics, terminal output, copy output and Studio event JSONL
+  now reference the applicable Teaching trace ID.
+
+## Milestone 15.7 validation
+
+- TypeScript build: passed.
+- Automatic trace E2E: Before/Action/After records and synthetic screenshots
+  created, literal absent from JSONL, forbidden-secret scan clean.
+- Empty demonstration Compile returned persistent HTTP 422 with its exact trace
+  ID visible in the diagnostics panel and terminal/event diagnostic.
+
+## Remaining after Milestone 15.7
+
+- Real managed-browser sessions intentionally have no trace screenshots.
+- Structural trace metadata cannot inspect cross-origin frame contents.
+- Full-suite validation, repository scans and documentation remain.
 
 ## Completed
 

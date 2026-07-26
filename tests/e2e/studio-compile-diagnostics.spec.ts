@@ -515,6 +515,58 @@ test("Workflow Library auto-saves immutable versions, reloads after restart and 
   );
 });
 
+test("Teaching trace is automatic, structural and referenced by persistent missing-action diagnostics", async ({
+  page,
+}) => {
+  await withIsolatedStudio(
+    async ({ controller, rootDirectory, studioOrigin }) => {
+      const literal = "SYNTHETIC-TRACE-MUST-NOT-PERSIST-VALUE";
+      await teachLegacyLayoutA(page, controller, studioOrigin, literal);
+      const firstTrace = controller.snapshot().teachingTrace!;
+      const firstTraceDirectory = path.join(
+        rootDirectory,
+        "local-data",
+        "teaching-traces",
+        firstTrace.id,
+      );
+      const traceText = await readFile(
+        path.join(firstTraceDirectory, "trace.jsonl"),
+        "utf8",
+      );
+      expect(traceText).toContain('"phase":"Before"');
+      expect(traceText).toContain('"phase":"Action"');
+      expect(traceText).toContain('"phase":"After"');
+      expect(traceText).toContain('"valueKind":"literal"');
+      expect(traceText).not.toContain(literal);
+      expect(traceText).not.toMatch(
+        /password|cookie|authorization|api[-_]?key|[?&]patient=/i,
+      );
+      expect(
+        await readFile(
+          path.join(firstTraceDirectory, "before.synthetic.png"),
+        ),
+      ).not.toHaveLength(0);
+
+      await controller.clearDemonstration();
+      await controller.startTeaching();
+      await controller.stopTeaching();
+      const emptyTraceId = controller.snapshot().teachingTrace!.id;
+      const response = await page.request.post(`${studioOrigin}/api/compile`, {
+        data: { instruction: "", workflowName: "" },
+      });
+      expect(response.status()).toBe(422);
+      const body = await response.json();
+      expect(body.diagnostic.teachingTraceId).toBe(emptyTraceId);
+      await page.reload();
+      await expect(page.locator("#compilationDiagnostics")).toBeVisible();
+      await expect(page.locator("#diagnosticHttpStatus")).toHaveText("422");
+      await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
+        emptyTraceId,
+      );
+    },
+  );
+});
+
 test("fill without Enregistrer compiles and runs as COMPLETED_UNVERIFIED", async ({
   page,
 }) => {

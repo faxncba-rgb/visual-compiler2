@@ -6,6 +6,7 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import {
   appendFile,
+  chmod,
   readFile,
   readdir,
   mkdir,
@@ -149,6 +150,7 @@ export type StudioCompilationDiagnostic = {
   observedReactionSummary?: string;
   llmCalls: 0;
   openAIRequests: 0;
+  teachingTraceId?: string;
 };
 
 class StudioCompilationFailure extends Error {
@@ -256,6 +258,15 @@ export class StudioController {
   #abortController: AbortController | undefined;
   #mutation: "compile" | "run" | undefined;
   #workflowLibraryLoaded = false;
+  #teachingTrace:
+    | {
+        id: string;
+        sessionId: string;
+        filename: string;
+        directory: string;
+        status: "recording" | "closed";
+      }
+    | undefined;
 
   constructor(
     private readonly rootDirectory = process.cwd(),
@@ -277,6 +288,159 @@ export class StudioController {
 
   #workflowLibraryDirectory() {
     return path.join(this.rootDirectory, "local-data", "workflow-library");
+  }
+
+  async #beginTeachingTrace(session: DemonstrationSession) {
+    const id = createId("teaching-trace");
+    const directory = path.join(
+      this.rootDirectory,
+      "local-data",
+      "teaching-traces",
+      id,
+    );
+    const filename = path.join(directory, "trace.jsonl");
+    await mkdir(directory, { recursive: true });
+    const screenshot = this.testMode ? "before.synthetic.png" : undefined;
+    const livePage = this.browser.context
+      .pages()
+      .find((page) => !page.isClosed());
+    if (screenshot && livePage) {
+      await livePage.screenshot({
+        path: path.join(directory, screenshot),
+      });
+      await chmod(path.join(directory, screenshot), 0o600);
+    }
+    await writeFile(
+      filename,
+      `${JSON.stringify({
+        phase: "Before",
+        traceId: id,
+        sessionId: session.id,
+        occurredAt: session.startedAt,
+        structuralSnapshot: session.beforeState
+          ? {
+              pageContextId: session.beforeState.pageContextId,
+              fingerprint: session.beforeState.fingerprint,
+              capturedAt: session.beforeState.capturedAt,
+            }
+          : undefined,
+        screenshot: livePage ? screenshot : undefined,
+        syntheticScreenshot: Boolean(screenshot && livePage),
+        valuesPersisted: false,
+        queryParametersPersisted: false,
+        authenticationPersisted: false,
+      })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+    this.#teachingTrace = {
+      id,
+      sessionId: session.id,
+      filename,
+      directory,
+      status: "recording",
+    };
+  }
+
+  async #finishTeachingTrace(session: DemonstrationSession) {
+    const trace = this.#teachingTrace;
+    if (!trace || trace.sessionId !== session.id) return;
+    const actionEntries = session.actions.map((action) => ({
+      phase: "Action",
+      traceId: trace.id,
+      actionId: action.id,
+      sequence: action.sequence,
+      action: action.action,
+      pageContextId: action.pageContextId,
+      timestampOffsetMs: action.timestampOffsetMs,
+      target: action.target
+        ? {
+            fingerprint: action.target.fingerprint,
+            tag: action.target.tag,
+            role: action.target.role,
+            accessibleName: action.target.accessibleName,
+            associatedLabel: action.target.associatedLabel,
+            controlFamily: action.target.descriptor?.controlFamily,
+            frame: {
+              role: action.target.frame.role,
+              origin: action.target.frame.origin,
+              pathname: action.target.frame.pathname,
+              name: action.target.frame.name,
+              title: action.target.frame.title,
+            },
+          }
+        : undefined,
+      valueKind: action.value?.kind,
+      outputVariable: action.outputVariable,
+      editingTransaction: action.editingTransaction
+        ? {
+            id: action.editingTransaction.id,
+            committed: action.editingTransaction.committed,
+            inputEvents: action.editingTransaction.inputEvents,
+            compositionObserved:
+              action.editingTransaction.compositionObserved,
+            pasteObserved: action.editingTransaction.pasteObserved,
+          }
+        : undefined,
+      reactions: action.observedEffects.map((effect) => ({
+        type: effect.type,
+        pageContextId: effect.pageContextId,
+        fingerprint: effect.fingerprint,
+      })),
+      causedByActionId: action.causedByActionId,
+      resultingState: action.resultingState
+        ? {
+            pageContextId: action.resultingState.pageContextId,
+            fingerprint: action.resultingState.fingerprint,
+            capturedAt: action.resultingState.capturedAt,
+          }
+        : undefined,
+    }));
+    await appendFile(
+      trace.filename,
+      actionEntries.map((entry) => `${JSON.stringify(entry)}\n`).join(""),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const screenshot = this.testMode ? "after.synthetic.png" : undefined;
+    const livePage = this.browser.context
+      .pages()
+      .find((page) => !page.isClosed());
+    if (screenshot && livePage) {
+      await livePage.screenshot({
+        path: path.join(trace.directory, screenshot),
+      });
+      await chmod(path.join(trace.directory, screenshot), 0o600);
+    }
+    await appendFile(
+      trace.filename,
+      `${JSON.stringify({
+        phase: "After",
+        traceId: trace.id,
+        sessionId: session.id,
+        occurredAt: session.stoppedAt,
+        structuralSnapshot: session.afterState
+          ? {
+              pageContextId: session.afterState.pageContextId,
+              fingerprint: session.afterState.fingerprint,
+              capturedAt: session.afterState.capturedAt,
+            }
+          : undefined,
+        actionCount: session.actions.length,
+        pageGraph: session.pageGraph.nodes.map((node) => ({
+          id: node.id,
+          role: node.role,
+          parentId: node.parentId,
+          origin: node.origin,
+          pathname: node.pathname,
+          structuralFingerprint: node.structuralFingerprint,
+          status: node.status,
+        })),
+        screenshot: livePage ? screenshot : undefined,
+        syntheticScreenshot: Boolean(screenshot && livePage),
+        valuesPersisted: false,
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    trace.status = "closed";
   }
 
   #workflowLibraryIndexPath() {
@@ -568,6 +732,13 @@ export class StudioController {
         status: this.workflowLibraryStatus,
         entries: this.workflowLibraryEntries,
       },
+      teachingTrace: this.#teachingTrace
+        ? {
+            id: this.#teachingTrace.id,
+            sessionId: this.#teachingTrace.sessionId,
+            status: this.#teachingTrace.status,
+          }
+        : undefined,
       metrics: {
         compileTimeModelCalls:
           this.workflow?.compilationMetadata.modelCalls ?? 0,
@@ -648,6 +819,7 @@ export class StudioController {
       throw new Error("The managed browser is not available.");
     this.machine.transition("RECORDING");
     this.session = await this.recorder!.start();
+    await this.#beginTeachingTrace(this.session);
     this.workflow = undefined;
     this.telemetry = undefined;
     this.aiPayload = undefined;
@@ -676,6 +848,7 @@ export class StudioController {
     if (this.machine.state !== "RECORDING")
       throw new Error("Teaching is not active.");
     this.session = await this.recorder!.stop();
+    await this.#finishTeachingTrace(this.session);
     this.localValues = LocalVariableValuesSchema.parse(
       this.recorder!.localValues,
     );
@@ -955,6 +1128,9 @@ export class StudioController {
       ...(failedTelemetryStep
         ? { observedReactionSummary: failedTelemetryStep.message }
         : {}),
+      ...(this.#teachingTrace
+        ? { teachingTraceId: this.#teachingTrace.id }
+        : {}),
       llmCalls: 0,
       openAIRequests: 0,
     };
@@ -1150,6 +1326,7 @@ export class StudioController {
     }
     if (this.machine.state === "RECORDING") {
       this.session = await this.recorder!.stop();
+      await this.#finishTeachingTrace(this.session);
       this.localValues = this.recorder!.localValues;
       this.machine.transition("STOPPED");
       await this.persistLastDemonstration();

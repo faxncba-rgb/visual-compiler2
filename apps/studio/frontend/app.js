@@ -70,6 +70,8 @@ function formatDiagnostic(diagnostic) {
     lines.push(`Selected locator: ${diagnostic.selectedLocator}`);
   if (diagnostic.observedReactionSummary)
     lines.push(`Observed reactions: ${diagnostic.observedReactionSummary}`);
+  if (diagnostic.teachingTraceId)
+    lines.push(`Teaching trace: ${diagnostic.teachingTraceId}`);
   if (diagnostic.structuralEvidence)
     lines.push(
       `Structural evidence: ${JSON.stringify(diagnostic.structuralEvidence)}`,
@@ -97,6 +99,7 @@ function renderDiagnostic(diagnostic) {
       targetSummary: diagnostic.targetSummary,
       selectedLocator: diagnostic.selectedLocator,
       observedReactionSummary: diagnostic.observedReactionSummary,
+      teachingTraceId: diagnostic.teachingTraceId,
       structuralEvidence: diagnostic.structuralEvidence,
       applicationOutcomeEvidence: diagnostic.applicationOutcomeEvidence,
       llmCalls: diagnostic.llmCalls,
