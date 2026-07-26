@@ -2,7 +2,22 @@
 
 ## Current milestone
 
-Milestone 14 — simplified real Lab Mode.
+Milestone 15.1 — editing-transaction recorder audit.
+
+## Milestone objective
+
+- Reproduce the missing consultation text without relying on an arbitrary
+  typing delay.
+- Identify the recorder boundary that loses the final editable value before
+  Stop, navigation or frame replacement.
+
+## Current finding
+
+- The recorder stores a pending DOM-node timer and reads the value later.
+- It flushes on `change`, but not synchronously before every causal boundary
+  and not from `Stop teaching`.
+- The existing synthetic helpers wait 300–1,100 ms, masking the same race seen
+  in controlled use.
 
 ## Completed
 

@@ -11,9 +11,10 @@ const browser = new ManagedBrowser({
   profileDirectory,
   headless: true,
 });
+const fixtureOrigin = `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}`;
 
 try {
-  const page = await browser.open("http://127.0.0.1:4273/fixture?variant=A");
+  const page = await browser.open(`${fixtureOrigin}/fixture?variant=A`);
   const recorder = new DemonstrationRecorder(browser.context, browser.graph);
   await recorder.attach();
   await recorder.start();
@@ -21,9 +22,7 @@ try {
   const editor = page!
     .frameLocator('iframe[title="Éditeur de consultation"]')
     .getByLabel("Texte de consultation", { exact: true });
-  await editor.click();
-  await editor.pressSequentially("SYNTHETIC-DEV-MODE-CALLBACK");
-  await page!.waitForTimeout(1_100);
+  await editor.fill("SYNTHETIC-DEV-MODE-CALLBACK");
   await page!.getByText("Enregistrer", { exact: true }).click();
   await page!
     .getByText("Consultation synthétique enregistrée.", { exact: true })
@@ -39,6 +38,13 @@ try {
   console.log(
     JSON.stringify({
       fillCount: fills.length,
+      actions: session.actions.map((action) => ({
+        action: action.action,
+        name: action.name,
+        sequence: action.sequence,
+        valueRef: action.valueRef,
+        linkedToFill: action.sequenceContext?.savesPreviousEditor,
+      })),
       stable: session.effectReconciliation?.status,
       historyCount: session.applicationStateAfter?.historyCount,
       saveLinkedToFill: save?.sequenceContext?.savesPreviousEditor,
