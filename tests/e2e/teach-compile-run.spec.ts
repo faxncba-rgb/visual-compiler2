@@ -20,11 +20,26 @@ test.describe("required demonstration-first consultation workflow", () => {
           await teachPrimaryWorkflow({ page, recorder });
 
         expect(session.authenticationExcluded).toBe(true);
+        expect(
+          session.actions
+            .filter((action) => action.action === "fill")
+            .map((action) => action.value),
+        ).toEqual([
+          {
+            kind: "literal",
+            value: demonstratedValue,
+            persistence: "workflow",
+          },
+        ]);
         expect(session.actions).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               action: "fill",
-              valueRef: "{{consultation_text}}",
+              value: {
+                kind: "literal",
+                value: demonstratedValue,
+                persistence: "workflow",
+              },
               target: expect.objectContaining({
                 associatedLabel: "Texte de consultation",
                 role: "textbox",
@@ -60,8 +75,9 @@ test.describe("required demonstration-first consultation workflow", () => {
             (action) => action.target?.inputType === "password",
           ),
         ).toBe(false);
-        expect(JSON.stringify(session)).not.toContain(demonstratedValue);
+        expect(JSON.stringify(session)).toContain(demonstratedValue);
         expect(JSON.stringify(session)).not.toContain("NEVER-RECORD-THIS");
+        expect(values).toEqual({});
 
         const workflow = await compilePrimary({
           browser,
@@ -76,7 +92,12 @@ test.describe("required demonstration-first consultation workflow", () => {
           role: "textbox",
           name: "Texte de consultation",
         });
-        expect(JSON.stringify(workflow)).not.toContain(demonstratedValue);
+        expect(fillStep?.value).toEqual({
+          kind: "literal",
+          value: demonstratedValue,
+          persistence: "workflow",
+        });
+        expect(JSON.stringify(workflow)).toContain(demonstratedValue);
         const generalized = await compilePrimary({
           browser,
           session,
@@ -115,6 +136,11 @@ test.describe("required demonstration-first consultation workflow", () => {
         expect(first.state).toBe("Passed");
         expect(first.llmCalls).toBe(0);
         expect(first.openAIRequests).toBe(0);
+        await expect(
+          page
+            .locator("[data-vc-consultation-history] > li")
+            .filter({ hasText: demonstratedValue }),
+        ).toHaveCount(1);
         await expect(await consultationEditor(page)).toHaveValue("");
         await expect(page.locator('[name="date_consultation"]')).toHaveValue(
           before.date,

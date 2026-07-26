@@ -7,6 +7,32 @@ import {
 import { loop, session, target } from "../helpers/factories";
 
 describe("Demonstration IR", () => {
+  it("persists an explicitly authorized workflow literal", () => {
+    const base = session();
+    const literal = {
+      ...base,
+      actions: base.actions.map((action, index) =>
+        index === 0
+          ? {
+              ...action,
+              valueRef: undefined,
+              value: {
+                kind: "literal" as const,
+                value: "test du DR LEROY",
+                persistence: "workflow" as const,
+              },
+            }
+          : action,
+      ),
+    };
+    const parsed = DemonstrationSessionSchema.parse(literal);
+    expect(parsed.actions[0]?.value).toEqual({
+      kind: "literal",
+      value: "test du DR LEROY",
+      persistence: "workflow",
+    });
+  });
+
   it("validates a parameterized demonstration with no raw local value", () => {
     const parsed = DemonstrationSessionSchema.parse(session());
     expect(parsed.actions[0]?.valueRef).toBe("{{consultation_text}}");

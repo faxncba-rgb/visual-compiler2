@@ -26,6 +26,7 @@ type BrowserTargetPayload = Omit<DemonstratedTarget, "frame" | "descriptor"> & {
   normalizedStaticText?: string;
   hasOnclick?: boolean;
   rawTargetPromoted?: boolean;
+  forbiddenValue?: boolean;
 };
 
 type RawApplicationState = {
@@ -77,6 +78,17 @@ export type CapturedBrowserEvent = {
     | "focus";
   target?: BrowserTargetPayload;
   value?: string;
+  valueSource?: "literal" | "runtime-variable";
+  runtimeVariableName?: string;
+  editingTransaction?: {
+    id: string;
+    startedAt: number;
+    phase: "update" | "commit";
+    inputEvents: number;
+    compositionObserved: boolean;
+    pasteObserved: boolean;
+    selectionObserved: boolean;
+  };
   key?: string;
   applicationStateBeforeAction?: RawApplicationState;
   occurredAt: number;
@@ -325,8 +337,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
   if (document.__vc2RecorderInstalled) return;
   Object.defineProperty(document, '__vc2RecorderInstalled', { value: true });
   globalThis.__vc2RecorderInstalled = true;
-  const pendingInputs = new WeakMap();
-  const emittedInputValues = new WeakMap();
+  let activeEdit;
+  let editSequence = 0;
   const text = value => String(value || '').replace(/\\s+/g, ' ').trim();
   const staticInterfaceText = value => {
     const normalized = text(value).slice(0, 120);
@@ -451,7 +463,20 @@ const RECORDER_INIT_SCRIPT = `(() => {
   const target = (element, rawElement = element) => {
     if (!(element instanceof Element)) return undefined;
     const inputType = element instanceof HTMLInputElement ? element.type : undefined;
-    if (inputType?.toLowerCase() === 'password') return { password: true };
+    const identity = [
+      inputType,
+      element.getAttribute('name'),
+      element.getAttribute('id'),
+      element.getAttribute('autocomplete'),
+      element.getAttribute('aria-label'),
+      element.closest('form')?.getAttribute('name'),
+      element.closest('form')?.getAttribute('id'),
+      element.closest('form')?.getAttribute('action')
+    ].filter(Boolean).join('|');
+    const forbiddenValue =
+      inputType?.toLowerCase() === 'password' ||
+      /(?:^|[^a-z])(user(?:name)?|login|sign[-_ ]?in|pass(?:word|wd)?|csrf|xsrf|auth(?:entication|orization)?|bearer|api[-_ ]?key|session[-_ ]?(?:id|token)|one[-_ ]?time[-_ ]?(?:code|password))(?:[^a-z]|$)/i.test(identity);
+    if (forbiddenValue) return { password: inputType?.toLowerCase() === 'password', forbiddenValue: true };
     const container = element.closest('section,form,article,[role=dialog],[role=region]');
     const heading = container?.querySelector('h1,h2,h3,[role=heading]');
     const parent = element.parentElement;
@@ -520,7 +545,9 @@ const RECORDER_INIT_SCRIPT = `(() => {
       unstableAttributes: ['id','class'],
       structuralPath: cssPath(element),
       beforeFingerprint: hash(signature + '|' + element.getAttribute('aria-expanded') + '|' + element.getAttribute('aria-checked')),
-      editorAdapter: element.dataset?.vcEditor === 'legacy-facade' ? 'legacy-facade' :
+      forbiddenValue: false,
+      editorAdapter: element.dataset?.vcKeyboardDependent === 'true' ? 'keyboard' :
+        element.dataset?.vcEditor === 'legacy-facade' ? 'legacy-facade' :
         element.isContentEditable ? 'contenteditable' : 'playwright-fill',
       backingFieldSelector: element.dataset?.vcBacking || undefined,
       captureValidation: {
@@ -538,22 +565,116 @@ const RECORDER_INIT_SCRIPT = `(() => {
   const send = payload => {
     try { void globalThis.__vc2Record(payload); } catch {}
   };
-  const sendValue = (element, info, kind) => {
-    const value = element.isContentEditable ? element.textContent : element.value;
-    const comparableValue = String(value ?? '');
-    if (emittedInputValues.get(element) === comparableValue) return;
-    emittedInputValues.set(element, comparableValue);
-    send({ kind, target: info, value, occurredAt: Date.now() });
+  const isEditable = element => element instanceof Element && (
+    element.matches('input:not([type=hidden]):not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]),textarea,select,[contenteditable=true],[role=textbox]') ||
+    (document.designMode === 'on' && element === document.body)
+  );
+  const editableValue = element => {
+    if (element instanceof HTMLSelectElement) return element.value;
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return element.value;
+    return element.textContent ?? '';
   };
+  const openEdit = element => {
+    if (!isEditable(element)) return undefined;
+    if (activeEdit?.element === element) return activeEdit;
+    flushEdit('commit');
+    const info = target(element);
+    if (!info || info.password || info.forbiddenValue) return undefined;
+    activeEdit = {
+      id: 'edit-' + Date.now().toString(36) + '-' + (++editSequence).toString(36),
+      startedAt: Date.now(),
+      element,
+      target: info,
+      value: String(editableValue(element)),
+      dirty: false,
+      inputEvents: 0,
+      compositionObserved: false,
+      pasteObserved: false,
+      selectionObserved: false,
+      lastPublishedValue: undefined
+    };
+    return activeEdit;
+  };
+  const publishEdit = phase => {
+    const edit = activeEdit;
+    if (!edit || !edit.dirty) return;
+    const value = String(edit.value ?? '');
+    if (phase === 'update' && edit.lastPublishedValue === value) return;
+    edit.lastPublishedValue = value;
+    send({
+      kind: edit.element instanceof HTMLSelectElement ? 'select' : 'fill',
+      target: edit.target,
+      value,
+      valueSource: 'literal',
+      editingTransaction: {
+        id: edit.id,
+        startedAt: edit.startedAt,
+        phase,
+        inputEvents: edit.inputEvents,
+        compositionObserved: edit.compositionObserved,
+        pasteObserved: edit.pasteObserved,
+        selectionObserved: edit.selectionObserved
+      },
+      occurredAt: Date.now()
+    });
+  };
+  function flushEdit(phase = 'commit') {
+    if (!activeEdit) return;
+    if (activeEdit.element?.isConnected) {
+      activeEdit.value = String(editableValue(activeEdit.element));
+    }
+    publishEdit(phase);
+    if (phase === 'commit') activeEdit = undefined;
+  }
+  const updateEdit = (element, details = {}) => {
+    const edit = openEdit(element);
+    if (!edit) return;
+    edit.value = String(editableValue(element));
+    edit.dirty = true;
+    edit.inputEvents += details.inputEvent ? 1 : 0;
+    edit.compositionObserved ||= Boolean(details.composition);
+    edit.pasteObserved ||= Boolean(details.paste);
+    edit.selectionObserved ||= Boolean(details.selection);
+    publishEdit('update');
+  };
+  globalThis.__vc2FlushEditingTransactions = () => flushEdit('commit');
+  globalThis.__vc2ResetEditingTransactions = () => {
+    activeEdit = undefined;
+  };
+  document.addEventListener('focusin', event => {
+    openEdit(event.target);
+  }, true);
+  document.addEventListener('focusout', event => {
+    if (activeEdit?.element === event.target) flushEdit('commit');
+  }, true);
+  document.addEventListener('beforeinput', event => {
+    openEdit(event.target);
+  }, true);
+  document.addEventListener('compositionstart', event => {
+    const edit = openEdit(event.target);
+    if (edit) edit.compositionObserved = true;
+  }, true);
+  document.addEventListener('compositionupdate', event => {
+    const edit = openEdit(event.target);
+    if (edit) edit.compositionObserved = true;
+  }, true);
+  document.addEventListener('compositionend', event => {
+    updateEdit(event.target, { inputEvent: true, composition: true });
+  }, true);
+  document.addEventListener('paste', event => {
+    const edit = openEdit(event.target);
+    if (edit) edit.pasteObserved = true;
+  }, true);
   document.addEventListener('click', event => {
+    flushEdit('commit');
     const raw = event.target;
     const element = actionableAncestor(raw) ||
       raw?.closest?.('input,select,textarea,[contenteditable=true],[role=textbox]');
     if (!element) return;
     const info = target(element, raw);
-    if (info?.password) return;
+    if (info?.password || info?.forbiddenValue) return;
     const type = element instanceof HTMLInputElement ? element.type : '';
-    const kind = type === 'checkbox' ? (element.checked ? 'check' : 'uncheck') : 'click';
+    const kind = ['checkbox','radio'].includes(type) ? (element.checked ? 'check' : 'uncheck') : 'click';
     send({
       kind,
       target: info,
@@ -562,35 +683,23 @@ const RECORDER_INIT_SCRIPT = `(() => {
     });
   }, true);
   document.addEventListener('dblclick', event => {
+    flushEdit('commit');
     const raw = event.target;
     const element = actionableAncestor(raw) || raw;
     const info = target(element, raw);
-    if (!info?.password) send({ kind: 'double-click', target: info, occurredAt: Date.now() });
+    if (!info?.password && !info?.forbiddenValue) send({ kind: 'double-click', target: info, occurredAt: Date.now() });
   }, true);
   document.addEventListener('input', event => {
     const element = event.target;
     if (element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type)) return;
-    const info = target(element);
-    if (!info || info.password) return;
-    const existing = pendingInputs.get(element);
-    if (existing) clearTimeout(existing);
-    pendingInputs.set(element, setTimeout(() => {
-      pendingInputs.delete(element);
-      sendValue(element, info, 'fill');
-    }, 300));
+    updateEdit(element, { inputEvent: true });
   }, true);
   document.addEventListener('change', event => {
     const element = event.target;
     if (element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type)) return;
-    const info = target(element);
-    if (!info || info.password) return;
-    const existing = pendingInputs.get(element);
-    if (existing) {
-      clearTimeout(existing);
-      pendingInputs.delete(element);
-    }
-    const kind = element.tagName === 'SELECT' ? 'select' : 'fill';
-    sendValue(element, info, kind);
+    if (!activeEdit || activeEdit.element !== element) return;
+    updateEdit(element, { inputEvent: true });
+    flushEdit('commit');
   }, true);
   document.addEventListener('keydown', event => {
     const modifiers = [
@@ -603,18 +712,29 @@ const RECORDER_INIT_SCRIPT = `(() => {
     if (!meaningful && modifiers.length === 0) return;
     const info = target(event.target);
     const key = [...modifiers, event.key].join('+');
-    if (!info?.password) send({ kind: 'keyboard', target: info, key, occurredAt: Date.now() });
+    if (!info?.password && !info?.forbiddenValue) send({ kind: 'keyboard', target: info, key, occurredAt: Date.now() });
+  }, true);
+  document.addEventListener('keyup', event => {
+    if (activeEdit?.element === event.target && activeEdit.target.editorAdapter === 'keyboard') {
+      updateEdit(event.target, { inputEvent: true });
+    }
+  }, true);
+  document.addEventListener('selectionchange', () => {
+    if (activeEdit) activeEdit.selectionObserved = true;
   }, true);
   document.addEventListener('submit', event => {
+    flushEdit('commit');
     const raw = event.submitter || event.target;
     const info = target(actionableAncestor(raw) || raw, raw);
-    if (!info?.password) send({
+    if (!info?.password && !info?.forbiddenValue) send({
       kind: 'submit',
       target: info,
       applicationStateBeforeAction: applicationState(),
       occurredAt: Date.now()
     });
   }, true);
+  globalThis.addEventListener('pagehide', () => flushEdit('commit'), true);
+  globalThis.addEventListener('beforeunload', () => flushEdit('commit'), true);
   globalThis.addEventListener('focus', () => send({ kind: 'focus', occurredAt: Date.now() }));
 })();`;
 
@@ -817,6 +937,7 @@ export class DemonstrationRecorder {
   #startedAtMs = 0;
   #nextSequence = 1;
   #localValues = new Map<string, string>();
+  #editingActions = new Map<string, RecordedAction>();
   #passwordEventsExcluded = 0;
   #crossOriginEventsExcluded = 0;
   #bindingErrors: string[] = [];
@@ -919,7 +1040,18 @@ export class DemonstrationRecorder {
     this.#startedAtMs = now.getTime();
     this.#nextSequence = 1;
     this.#localValues.clear();
+    this.#editingActions.clear();
     this.#saveObservation = undefined;
+    await Promise.all(
+      this.context
+        .pages()
+        .flatMap((page) => page.frames())
+        .map((frame) =>
+          frame
+            .evaluate("globalThis.__vc2ResetEditingTransactions?.()")
+            .catch(() => undefined),
+        ),
+    );
     this.#session = {
       id: createId("demo"),
       startedAt: now.toISOString(),
@@ -969,6 +1101,16 @@ export class DemonstrationRecorder {
   async stop() {
     if (!this.#active || !this.#session)
       throw new Error("Teaching is not active.");
+    await Promise.all(
+      this.context
+        .pages()
+        .flatMap((page) => page.frames())
+        .map((frame) =>
+          frame
+            .evaluate("globalThis.__vc2FlushEditingTransactions?.()")
+            .catch(() => undefined),
+        ),
+    );
     const stability = await this.#waitForDomStability();
     this.#active = false;
     this.#unwireDialogs();
@@ -1464,11 +1606,19 @@ export class DemonstrationRecorder {
 
   async #handleBrowserEvent(frame: Frame, payload: CapturedBrowserEvent) {
     if (!this.#active || !this.#session) return;
+    if (
+      payload.editingTransaction &&
+      payload.editingTransaction.startedAt < this.#startedAtMs
+    )
+      return;
     if (shouldExcludeFrame(frame)) {
       this.#crossOriginEventsExcluded += 1;
       return;
     }
-    if (payload.target?.inputType?.toLowerCase() === "password") {
+    if (
+      payload.target?.inputType?.toLowerCase() === "password" ||
+      payload.target?.forbiddenValue
+    ) {
       this.#passwordEventsExcluded += 1;
       return;
     }
@@ -1542,24 +1692,34 @@ export class DemonstrationRecorder {
           },
         })
       : undefined;
-    let valueRef: string | undefined;
+    let workflowValue:
+      | { kind: "literal"; value: string; persistence: "workflow" }
+      | {
+          kind: "runtime-variable";
+          name: string;
+          persistence: "memory-only";
+        }
+      | undefined;
     if (
       target &&
       payload.value !== undefined &&
       ["fill", "select"].includes(payload.kind)
     ) {
-      const name = variableNameForTarget(payload.target!);
-      valueRef = `{{${name}}}`;
-      this.#localValues.set(name, payload.value);
-      if (!this.#session.variables.some((variable) => variable.name === name)) {
-        this.#session.variables.push({
-          id: createId("variable"),
-          name,
-          valueType: payload.kind === "select" ? "option" : "string",
-          privacy: "local-variable",
-          required: true,
-          description: `Local value demonstrated for ${target.associatedLabel ?? target.accessibleName ?? target.tag}`,
-        });
+      if (
+        payload.valueSource === "runtime-variable" &&
+        payload.runtimeVariableName
+      ) {
+        workflowValue = {
+          kind: "runtime-variable",
+          name: payload.runtimeVariableName,
+          persistence: "memory-only",
+        };
+      } else {
+        workflowValue = {
+          kind: "literal",
+          value: payload.value,
+          persistence: "workflow",
+        };
       }
     }
     const previousInputAction = [...this.#session.actions]
@@ -1611,24 +1771,54 @@ export class DemonstrationRecorder {
       name: `${pageLabel(graphNode?.role ?? "main")} — ${actionLabel(payload.kind, payload.target)}`,
       ...(target ? { target } : {}),
       ...(sequenceContext ? { sequenceContext } : {}),
-      ...(valueRef ? { valueRef } : {}),
+      ...(workflowValue ? { value: workflowValue } : {}),
+      ...(payload.editingTransaction
+        ? {
+            editingTransaction: {
+              id: payload.editingTransaction.id,
+              committed: payload.editingTransaction.phase === "commit",
+              inputEvents: payload.editingTransaction.inputEvents,
+              compositionObserved:
+                payload.editingTransaction.compositionObserved,
+              pasteObserved: payload.editingTransaction.pasteObserved,
+              selectionObserved:
+                payload.editingTransaction.selectionObserved,
+            },
+          }
+        : {}),
       ...(payload.key ? { key: payload.key } : {}),
       observedEffects: [],
       timestampOffsetMs: Math.max(0, payload.occurredAt - this.#startedAtMs),
       optional: false,
     });
-    const disposition = deduplicateAction(this.#session.actions, recorded);
-    const persistedAction =
-      disposition === "added"
-        ? recorded
-        : [...this.#session.actions]
-            .reverse()
-            .find(
-              (action) =>
-                action.action === recorded.action &&
-                action.pageContextId === recorded.pageContextId &&
-                action.target?.fingerprint === recorded.target?.fingerprint,
-            );
+    let persistedAction: RecordedAction | undefined;
+    if (payload.editingTransaction) {
+      const existing = this.#editingActions.get(payload.editingTransaction.id);
+      if (existing) {
+        existing.value = recorded.value;
+        existing.target = recorded.target;
+        existing.editingTransaction = recorded.editingTransaction;
+        persistedAction = existing;
+      } else {
+        this.#session.actions.push(recorded);
+        this.#editingActions.set(payload.editingTransaction.id, recorded);
+        persistedAction = recorded;
+      }
+      if (payload.editingTransaction.phase === "update") return;
+    } else {
+      const disposition = deduplicateAction(this.#session.actions, recorded);
+      persistedAction =
+        disposition === "added"
+          ? recorded
+          : [...this.#session.actions]
+              .reverse()
+              .find(
+                (action) =>
+                  action.action === recorded.action &&
+                  action.pageContextId === recorded.pageContextId &&
+                  action.target?.fingerprint === recorded.target?.fingerprint,
+              );
+    }
     if (
       sequenceContext?.savesPreviousEditor &&
       payload.applicationStateBeforeAction

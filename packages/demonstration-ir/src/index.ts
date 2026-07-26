@@ -217,6 +217,19 @@ export const DemonstratedSequenceContextSchema = z.object({
   savesPreviousEditor: z.boolean(),
 });
 
+export const WorkflowActionValueSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("literal"),
+    value: z.string(),
+    persistence: z.literal("workflow"),
+  }),
+  z.object({
+    kind: z.literal("runtime-variable"),
+    name: z.string().regex(/^[a-z][a-z0-9_]*$/),
+    persistence: z.literal("memory-only"),
+  }),
+]);
+
 export const RecordedActionSchema = z.object({
   id: z.string(),
   sequence: z.number().int().positive().optional(),
@@ -225,7 +238,18 @@ export const RecordedActionSchema = z.object({
   name: z.string(),
   target: DemonstratedTargetSchema.optional(),
   sequenceContext: DemonstratedSequenceContextSchema.optional(),
+  value: WorkflowActionValueSchema.optional(),
   valueRef: z.string().optional(),
+  editingTransaction: z
+    .object({
+      id: z.string(),
+      committed: z.boolean(),
+      inputEvents: z.number().int().nonnegative(),
+      compositionObserved: z.boolean(),
+      pasteObserved: z.boolean(),
+      selectionObserved: z.boolean(),
+    })
+    .optional(),
   key: z.string().optional(),
   dialog: z
     .object({
@@ -432,6 +456,7 @@ export const CompiledStepSchema = z.object({
   sequenceContext: DemonstratedSequenceContextSchema.optional(),
   locatorCandidates: z.array(LocatorCandidateSchema),
   selectedLocatorId: z.string().optional(),
+  value: WorkflowActionValueSchema.optional(),
   valueRef: z.string().optional(),
   localLiteral: z.string().optional(),
   key: z.string().optional(),

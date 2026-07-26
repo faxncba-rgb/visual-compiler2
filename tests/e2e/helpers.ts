@@ -10,7 +10,7 @@ import type {
   DemonstrationSession,
 } from "../../packages/demonstration-ir/src";
 
-export const fixtureOrigin = "http://127.0.0.1:4273";
+export const fixtureOrigin = `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}`;
 
 export async function consultationEditor(page: Page) {
   if (
@@ -78,7 +78,6 @@ export async function teachPrimaryWorkflow(details: {
   await editor.click();
   await editor.press("ControlOrMeta+A");
   await editor.pressSequentially(value);
-  await page.waitForTimeout(380);
   await page.getByText("Enregistrer", { exact: true }).click();
   await page
     .getByText("Consultation synthétique enregistrée.", { exact: true })

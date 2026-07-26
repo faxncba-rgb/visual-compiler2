@@ -2,22 +2,50 @@
 
 ## Current milestone
 
-Milestone 15.1 — editing-transaction recorder audit.
+Milestone 15.2 — editing transactions and final-value capture.
 
 ## Milestone objective
 
-- Reproduce the missing consultation text without relying on an arbitrary
-  typing delay.
-- Identify the recorder boundary that loses the final editable value before
-  Stop, navigation or frame replacement.
+- Persist authorized demonstrated text as a first-class workflow literal.
+- Capture an editable target on focus and retain every final value independently
+  of the lifetime of its DOM node.
+- Consolidate input, change, composition, paste, key and selection signals into
+  one editing action.
 
-## Current finding
+## Milestone 15.1 finding
 
 - The recorder stores a pending DOM-node timer and reads the value later.
 - It flushes on `change`, but not synchronously before every causal boundary
   and not from `Stop teaching`.
 - The existing synthetic helpers wait 300–1,100 ms, masking the same race seen
   in controlled use.
+
+## Milestone 15.2 implementation
+
+- Added explicit `literal/workflow` and `runtime-variable/memory-only` value
+  types while retaining legacy value references for compatible loading.
+- Replaced the delayed DOM-node timer with a durable edit transaction updated
+  on every input and committed at focus, click, submit, unload and Stop
+  boundaries.
+- Captured the target descriptor at transaction start, consolidated duplicate
+  browser events and excluded authentication-like controls before value
+  capture.
+- Removed the artificial typing delay from the primary regression path.
+
+## Milestone 15.2 validation
+
+- Detached-frame smoke: the previously missing edit is now recorded.
+- Immediate `fill → Enregistrer` smoke: one fill precedes one linked save.
+- Primary Layout A → Layout B compile/run/run-again E2E: passed with the
+  literal in the artifact, Date and Heure unchanged and one save per run.
+- TypeScript build and focused IR/recorder/value unit suite: passed.
+
+## Remaining after Milestone 15.2
+
+- Runtime input strategies still need explicit ordered fallbacks and mandatory
+  post-entry verification.
+- Copy/paste still records a typed literal rather than memory-only dataflow.
+- Workflow Library and automatic Teaching trace remain to be implemented.
 
 ## Completed
 

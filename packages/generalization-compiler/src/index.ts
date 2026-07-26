@@ -538,6 +538,7 @@ async function compileSteps(
         : {}),
       locatorCandidates: candidates,
       ...(selectedLocatorId ? { selectedLocatorId } : {}),
+      ...(action.value ? { value: action.value } : {}),
       ...(action.valueRef && !localLiteral
         ? { valueRef: action.valueRef }
         : {}),
@@ -682,14 +683,20 @@ function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
       (candidate) => candidate.id === step.selectedLocatorId,
     );
     if (step.action === "fill" && selected) {
-      lines.push(
-        `  await ${generatedLocator(selected)}.fill(variables.${step.valueRef?.slice(2, -2) ?? "value"});`,
-      );
+      const generatedValue =
+        step.value?.kind === "literal"
+          ? JSON.stringify(step.value.value)
+          : `variables.${step.value?.kind === "runtime-variable" ? step.value.name : (step.valueRef?.slice(2, -2) ?? "value")}`;
+      lines.push(`  await ${generatedLocator(selected)}.fill(${generatedValue});`);
     } else if (step.action === "click" && selected) {
       lines.push(`  await ${generatedLocator(selected)}.click();`);
     } else if (step.action === "select" && selected) {
+      const generatedValue =
+        step.value?.kind === "literal"
+          ? JSON.stringify(step.value.value)
+          : `variables.${step.value?.kind === "runtime-variable" ? step.value.name : (step.valueRef?.slice(2, -2) ?? "value")}`;
       lines.push(
-        `  await ${generatedLocator(selected)}.selectOption(variables.${step.valueRef?.slice(2, -2) ?? "value"});`,
+        `  await ${generatedLocator(selected)}.selectOption(${generatedValue});`,
       );
     } else if (step.action === "check" && selected) {
       lines.push(`  await ${generatedLocator(selected)}.check();`);

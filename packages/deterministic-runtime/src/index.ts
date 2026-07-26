@@ -202,6 +202,7 @@ export class DeterministicRuntime {
     | { type: string; response: "accepted" | "dismissed" }
     | undefined;
   #dialogCursor = 0;
+  readonly #ephemeralValues = new Map<string, string>();
   readonly #outcomeBaselines = new Map<string, string | number>();
   #routeInstalled = false;
   #networkHandler: ((route: Route) => Promise<void>) | undefined;
@@ -340,6 +341,23 @@ export class DeterministicRuntime {
           reason: "OpenAI WebSocket blocked by deterministic runtime policy.",
         });
       },
+    );
+  }
+
+  #resolveStepValue(step: CompiledStep) {
+    if (step.value?.kind === "literal") return step.value.value;
+    if (step.value?.kind === "runtime-variable") {
+      const value = this.#ephemeralValues.get(step.value.name);
+      if (value === undefined)
+        throw new Error(
+          `Missing ephemeral runtime variable: ${step.value.name}`,
+        );
+      return value;
+    }
+    return resolveValueReference(
+      step.valueRef,
+      step.localLiteral,
+      this.#variables,
     );
   }
 
@@ -582,11 +600,7 @@ export class DeterministicRuntime {
     else if (step.action === "double-click")
       await locator.dblclick({ timeout: this.#timeout });
     else if (step.action === "fill") {
-      const value = resolveValueReference(
-        step.valueRef,
-        step.localLiteral,
-        this.#variables,
-      );
+      const value = this.#resolveStepValue(step);
       await locator.fill(value ?? "", { timeout: this.#timeout });
       await locator.evaluate((element) => {
         element.dispatchEvent(new Event("input", { bubbles: true }));
@@ -608,11 +622,7 @@ export class DeterministicRuntime {
         }
       });
     } else if (step.action === "select") {
-      const value = resolveValueReference(
-        step.valueRef,
-        step.localLiteral,
-        this.#variables,
-      );
+      const value = this.#resolveStepValue(step);
       await locator.selectOption(value ?? "");
     } else if (step.action === "check") await locator.check();
     else if (step.action === "uncheck") await locator.uncheck();

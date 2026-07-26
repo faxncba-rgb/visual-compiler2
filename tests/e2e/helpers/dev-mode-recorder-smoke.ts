@@ -42,6 +42,7 @@ try {
         action: action.action,
         name: action.name,
         sequence: action.sequence,
+        value: action.value,
         valueRef: action.valueRef,
         linkedToFill: action.sequenceContext?.savesPreviousEditor,
       })),
