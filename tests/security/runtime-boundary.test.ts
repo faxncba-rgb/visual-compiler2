@@ -1,6 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_LAB_TARGET_URL,
+  resolveConfiguredTarget,
+} from "../../apps/studio/backend/src/server";
 import { isOpenAIUrl } from "../../packages/shared/src";
 import { safeTelemetryMessage } from "../../packages/telemetry/src";
 
@@ -56,5 +60,35 @@ describe("zero-OpenAI runtime boundary", () => {
     expect(safe).not.toContain("credential");
     expect(safe).toContain("cookie=[REDACTED]");
     expect(safe).toContain("token=[REDACTED]");
+  });
+
+  it("rejects the real DPI and every remote host in automated test mode", () => {
+    expect(() =>
+      resolveConfiguredTarget({
+        testMode: true,
+        targetUrl: DEFAULT_LAB_TARGET_URL,
+      }),
+    ).toThrow("only an explicit local synthetic URL");
+    expect(() =>
+      resolveConfiguredTarget({
+        testMode: true,
+        targetUrl: "https://example.test/fixture",
+      }),
+    ).toThrow("only an explicit local synthetic URL");
+    expect(
+      resolveConfiguredTarget({
+        testMode: true,
+        targetUrl: "http://127.0.0.1:4273/fixture?variant=A",
+      }).canonicalTarget,
+    ).toBe("http://127.0.0.1:4273/fixture");
+  });
+
+  it("pins the checked-in E2E web server to explicit local test mode", async () => {
+    const config = await readFile(path.resolve("playwright.config.ts"), "utf8");
+    expect(config).toContain("VC_TEST_MODE=1");
+    expect(config).toContain(
+      "VISUAL_COMPILER_TEST_TARGET_URL='http://127.0.0.1:4273/fixture?variant=A'",
+    );
+    expect(config).not.toContain("VISUAL_COMPILER_TARGET_URL=");
   });
 });

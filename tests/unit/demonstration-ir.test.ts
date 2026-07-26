@@ -29,6 +29,16 @@ describe("Demonstration IR", () => {
     ).toThrow();
   });
 
+  it("migrates demonstrations without outcome evidence as UNVERIFIED", () => {
+    const legacy = session() as unknown as Record<string, unknown>;
+    delete legacy.outcomeCandidates;
+    delete legacy.outcomeVerification;
+    const parsed = DemonstrationSessionSchema.parse(legacy);
+    expect(parsed.outcomeCandidates).toEqual([]);
+    expect(parsed.outcomeVerification).toBe("UNVERIFIED");
+    expect(parsed.actions.some((action) => action.target)).toBe(true);
+  });
+
   it("keeps mutable DOM and consultation-history evidence out of the target descriptor", () => {
     const parsed = DemonstratedTargetDescriptorSchema.parse({
       ...target().descriptor!,

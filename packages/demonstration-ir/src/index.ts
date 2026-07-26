@@ -84,6 +84,8 @@ export const DemonstratedTargetSchema = z.object({
   readonly: z.boolean(),
   visible: z.boolean(),
   enabled: z.boolean(),
+  checked: z.boolean().optional(),
+  selected: z.boolean().optional(),
   formName: z.string().optional(),
   semanticContainer: z
     .object({
@@ -217,6 +219,7 @@ export const DemonstratedSequenceContextSchema = z.object({
 
 export const RecordedActionSchema = z.object({
   id: z.string(),
+  sequence: z.number().int().positive().optional(),
   pageContextId: z.string(),
   action: RecordedActionTypeSchema,
   name: z.string(),
@@ -232,6 +235,8 @@ export const RecordedActionSchema = z.object({
     })
     .optional(),
   observedEffects: z.array(ObservedEffectSchema),
+  causedByActionId: z.string().optional(),
+  resultingState: z.lazy(() => StructuralSnapshotSchema).optional(),
   timestampOffsetMs: z.number().nonnegative(),
   optional: z.boolean().default(false),
 });
@@ -311,6 +316,12 @@ export const EffectReconciliationSchema = z.object({
   reconciledAt: z.string().datetime(),
 });
 
+export const OutcomeVerificationSchema = z.enum([
+  "VERIFIED",
+  "PARTIALLY_VERIFIED",
+  "UNVERIFIED",
+]);
+
 export const DemonstrationSessionSchema = z.object({
   id: z.string(),
   startedAt: z.string().datetime(),
@@ -324,6 +335,7 @@ export const DemonstrationSessionSchema = z.object({
   applicationStateBefore: ApplicationStateSchema.optional(),
   applicationStateAfter: ApplicationStateSchema.optional(),
   outcomeCandidates: z.array(ApplicationOutcomeCandidateSchema).default([]),
+  outcomeVerification: OutcomeVerificationSchema.default("UNVERIFIED"),
   effectReconciliation: EffectReconciliationSchema.optional(),
   authenticationExcluded: z.literal(true),
 });
@@ -485,7 +497,7 @@ export const OutcomeEvidenceSchema = z.object({
 });
 
 export const ApplicationOutcomeSchema = z.object({
-  positiveEvidence: z.array(OutcomeEvidenceSchema).min(1),
+  positiveEvidence: z.array(OutcomeEvidenceSchema).default([]),
   negativeEvidence: z
     .array(
       z.object({
@@ -503,6 +515,7 @@ export const ApplicationOutcomeSchema = z.object({
     )
     .min(1),
   requireAllPositive: z.boolean().default(true),
+  verification: OutcomeVerificationSchema.default("UNVERIFIED"),
 });
 
 export const CompilationDiagnosticSchema = z.object({
@@ -542,6 +555,7 @@ export const RuntimeStateSchema = z.enum([
   "Ready",
   "Running",
   "Passed",
+  "CompletedUnverified",
   "Failed",
   "Stopped",
 ]);

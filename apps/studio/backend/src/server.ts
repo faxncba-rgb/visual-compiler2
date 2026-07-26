@@ -48,11 +48,12 @@ import {
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendDirectory = path.resolve(moduleDirectory, "../../frontend");
-const LAST_DEMONSTRATION_VERSION = 1;
+const LAST_DEMONSTRATION_VERSION = 2;
+export const DEFAULT_LAB_TARGET_URL = "https://dpi-ncba.gbna-sante.fr/";
 
 type LastDemonstrationMetadata = {
   version: typeof LAST_DEMONSTRATION_VERSION;
-  profileId: string;
+  targetOrigin: string;
   origin: string;
   pathname: string;
   structuralFingerprint: string;
@@ -61,11 +62,39 @@ type LastDemonstrationMetadata = {
   valuesStoredSeparately: true;
 };
 
-function syntheticProfileId(value: string) {
+export type StudioControllerOptions = {
+  targetUrl?: string;
+  testMode?: boolean;
+};
+
+export function resolveConfiguredTarget(options: StudioControllerOptions = {}) {
+  const testMode = options.testMode ?? process.env.VC_TEST_MODE === "1";
+  const value = testMode
+    ? (options.targetUrl ?? process.env.VISUAL_COMPILER_TEST_TARGET_URL ?? "")
+    : (options.targetUrl ??
+      process.env.VISUAL_COMPILER_TARGET_URL ??
+      DEFAULT_LAB_TARGET_URL);
+  if (!value)
+    throw new Error(
+      "VISUAL_COMPILER_TEST_TARGET_URL is required in automated test mode.",
+    );
   const url = new URL(value);
-  if (url.pathname === "/fixture/popup-workflow")
-    return "synthetic-popup-workflow";
-  return "synthetic-legacy-dpi";
+  if (testMode) {
+    if (
+      url.protocol !== "http:" ||
+      !["127.0.0.1", "localhost"].includes(url.hostname)
+    )
+      throw new Error(
+        "Automated tests may target only an explicit local synthetic URL.",
+      );
+  } else if (url.protocol !== "https:") {
+    throw new Error("Normal Lab Mode requires an HTTPS target.");
+  }
+  return {
+    testMode,
+    targetUrl: url.toString(),
+    canonicalTarget: canonicalizeUrl(url.toString()).canonicalUrl,
+  };
 }
 
 export type StudioCompilationStage =
@@ -77,11 +106,19 @@ export type StudioCompilationStage =
 export type StudioCompilationDiagnostic = {
   id: string;
   occurredAt: string;
-  httpStatus: number;
-  compilerStage: StudioCompilationStage;
+  httpStatus?: number;
+  stage: StudioCompilationStage | "browser-open" | "runtime-execution";
+  workflowState: string;
   serverMessage: string;
   structuralEvidence?: LocatorValidationEvidence;
   applicationOutcomeEvidence?: ApplicationOutcomeValidationEvidence;
+  stepId?: string;
+  actionType?: string;
+  targetSummary?: string;
+  selectedLocator?: string;
+  observedReactionSummary?: string;
+  llmCalls: 0;
+  openAIRequests: 0;
 };
 
 class StudioCompilationFailure extends Error {
@@ -149,21 +186,6 @@ async function readJson(request: IncomingMessage) {
   >;
 }
 
-function assertSyntheticTarget(value: unknown) {
-  if (typeof value !== "string") throw new Error("A target URL is required.");
-  const url = new URL(value);
-  if (
-    url.protocol !== "http:" ||
-    !["127.0.0.1", "localhost"].includes(url.hostname) ||
-    url.port !== String(process.env.VC_FIXTURE_PORT ?? 4273)
-  ) {
-    throw new Error(
-      "Autonomous Lab Mode is restricted to the bundled local synthetic DPI.",
-    );
-  }
-  return url.toString();
-}
-
 async function serveFile(response: ServerResponse, filename: string) {
   const extension = path.extname(filename);
   const contentType =
@@ -195,13 +217,20 @@ export class StudioController {
   readonly studioEventLog: StudioCompilationDiagnostic[] = [];
   localValues: LocalVariableValues = {};
   generalizationInstruction = "";
-  targetUrl = `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? 4273}/fixture?variant=A`;
+  readonly testMode: boolean;
+  readonly targetUrl: string;
   #abortController: AbortController | undefined;
   #mutation: "compile" | "run" | undefined;
 
-  constructor(private readonly rootDirectory = process.cwd()) {
+  constructor(
+    private readonly rootDirectory = process.cwd(),
+    options: StudioControllerOptions = {},
+  ) {
+    const configured = resolveConfiguredTarget(options);
+    this.testMode = configured.testMode;
+    this.targetUrl = configured.targetUrl;
     this.browser = new ManagedBrowser({
-      profileDirectory: path.join(rootDirectory, "browser-profiles", "studio"),
+      profileDirectory: path.join(rootDirectory, ".local", "browser-profile"),
       headless: process.env.VC_HEADLESS === "1",
       slowMo: 0,
     });
@@ -218,9 +247,23 @@ export class StudioController {
     );
     if (!existsSync(filename)) return undefined;
     try {
-      const value = JSON.parse(
-        readFileSync(filename, "utf8"),
-      ) as LastDemonstrationMetadata;
+      const stored = JSON.parse(readFileSync(filename, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const value: LastDemonstrationMetadata =
+        stored.version === 1
+          ? {
+              version: LAST_DEMONSTRATION_VERSION,
+              targetOrigin: String(stored.origin ?? ""),
+              origin: String(stored.origin ?? ""),
+              pathname: String(stored.pathname ?? "/"),
+              structuralFingerprint: String(stored.structuralFingerprint ?? ""),
+              authenticationPersisted: false,
+              queryParametersPersisted: false,
+              valuesStoredSeparately: true,
+            }
+          : (stored as LastDemonstrationMetadata);
       if (
         value.version !== LAST_DEMONSTRATION_VERSION ||
         value.authenticationPersisted !== false ||
@@ -296,7 +339,7 @@ export class StudioController {
       structurallyCompatible = Boolean(
         root &&
           metadata &&
-          metadata.profileId === syntheticProfileId(this.targetUrl) &&
+          metadata.targetOrigin === canonicalizeUrl(this.targetUrl).origin &&
           metadata.origin === root.origin &&
           metadata.pathname === root.pathname &&
           metadata.structuralFingerprint === root.structuralFingerprint,
@@ -304,7 +347,6 @@ export class StudioController {
     }
     return {
       available,
-      ...(metadata ? { profileId: metadata.profileId } : {}),
       structurallyCompatible,
       ...this.#lastDemonstrationOutcomeStatus(),
     };
@@ -314,7 +356,8 @@ export class StudioController {
     return {
       product: "Visual Compiler 2",
       labMode: true,
-      banner: "LAB MODE — synthetic test records only",
+      banner: "LAB MODE — local demonstration compiler",
+      testMode: this.testMode,
       state: this.machine.state,
       targetUrl: canonicalizeUrl(this.targetUrl).canonicalUrl,
       browser: this.browser.status(),
@@ -332,6 +375,7 @@ export class StudioController {
       aiPayloadPreview: this.aiPayload,
       workflow: this.workflow,
       telemetry: this.telemetry,
+      diagnostic: this.compilationDiagnostic,
       compilationDiagnostic: this.compilationDiagnostic,
       studioEventLog: this.studioEventLog,
       lastDemonstration: this.#lastDemonstrationStatus(),
@@ -350,26 +394,51 @@ export class StudioController {
     };
   }
 
-  async openBrowser(targetUrl: unknown) {
-    if (this.machine.state !== "IDLE")
-      throw new Error("Reset before opening a different managed browser.");
-    this.targetUrl = assertSyntheticTarget(targetUrl);
-    await this.browser.open(this.targetUrl);
-    this.recorder = new DemonstrationRecorder(
-      this.browser.context,
-      this.browser.graph,
-    );
-    await this.recorder.attach();
-    this.machine.transition("BROWSER_OPEN");
-    this.machine.transition("AUTHENTICATING");
-    await this.persistRecoverableState();
+  async initialize() {
+    if (this.browser.status().open) return this.snapshot();
+    try {
+      await this.browser.open(this.targetUrl);
+      this.recorder = new DemonstrationRecorder(
+        this.browser.context,
+        this.browser.graph,
+      );
+      await this.recorder.attach();
+      if (this.machine.state !== "IDLE") this.machine.reset();
+      this.machine.transition("BROWSER_OPEN");
+      this.machine.transition("READY_TO_TEACH");
+      await this.persistRecoverableState();
+    } catch (error) {
+      await this.browser.close().catch(() => undefined);
+      this.machine.reset();
+      await this.recordDiagnostic(error, undefined, "browser-open");
+    }
+    return this.snapshot();
   }
 
-  async authenticationComplete() {
-    if (this.machine.state !== "AUTHENTICATING")
-      throw new Error("Manual authentication is not currently active.");
-    this.machine.transition("READY_TO_TEACH");
-    await this.persistRecoverableState();
+  async reopenBrowser() {
+    if (
+      ["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state) ||
+      this.#mutation
+    )
+      throw new Error(
+        "Stop the active operation before reopening the browser.",
+      );
+    await this.browser.close();
+    this.recorder = undefined;
+    this.machine.reset();
+    return this.initialize();
+  }
+
+  async returnHome() {
+    if (!this.browser.status().open)
+      throw new Error("Reopen the managed browser before returning home.");
+    if (
+      ["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state) ||
+      this.#mutation
+    )
+      throw new Error("Stop the active operation before returning home.");
+    await this.browser.navigate(this.targetUrl);
+    return this.snapshot();
   }
 
   async startTeaching() {
@@ -379,17 +448,37 @@ export class StudioController {
         "DEMONSTRATION_REVIEW",
         "READY_TO_RUN",
         "PASSED",
+        "COMPLETED_UNVERIFIED",
         "FAILED",
         "STOPPED",
       ].includes(this.machine.state)
     )
       throw new Error("Studio is not ready to teach.");
+    if (!this.recorder || !this.browser.status().open)
+      throw new Error("The managed browser is not available.");
     this.machine.transition("RECORDING");
     this.session = await this.recorder!.start();
     this.workflow = undefined;
     this.telemetry = undefined;
     this.aiPayload = undefined;
     this.localValues = {};
+    await this.persistRecoverableState();
+  }
+
+  async clearDemonstration() {
+    if (["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state))
+      throw new Error("Stop the active operation before clearing.");
+    this.session = undefined;
+    this.workflow = undefined;
+    this.telemetry = undefined;
+    this.aiPayload = undefined;
+    this.localValues = {};
+    this.generalizationInstruction = "";
+    this.machine.reset();
+    if (this.browser.status().open) {
+      this.machine.transition("BROWSER_OPEN");
+      this.machine.transition("READY_TO_TEACH");
+    }
     await this.persistRecoverableState();
   }
 
@@ -420,7 +509,7 @@ export class StudioController {
       );
     const metadata: LastDemonstrationMetadata = {
       version: LAST_DEMONSTRATION_VERSION,
-      profileId: syntheticProfileId(this.targetUrl),
+      targetOrigin: canonicalizeUrl(this.targetUrl).origin,
       origin: root.origin,
       pathname: root.pathname,
       structuralFingerprint: root.structuralFingerprint,
@@ -451,12 +540,10 @@ export class StudioController {
 
   async restoreLastDemonstration() {
     if (this.machine.state !== "READY_TO_TEACH")
-      throw new Error(
-        "Open and authenticate the matching synthetic profile before restoring.",
-      );
+      throw new Error("Open the matching authorized page before restoring.");
     const metadata = this.#readLastDemonstrationMetadata();
     if (!metadata)
-      throw new Error("No completed synthetic demonstration is available.");
+      throw new Error("No completed local demonstration is available.");
     const directory = this.#lastDemonstrationDirectory();
     const [sessionText, valuesText] = await Promise.all([
       readFile(path.join(directory, "session.json"), "utf8"),
@@ -469,13 +556,13 @@ export class StudioController {
     const liveRoot = graph.nodes.find((node) => node.id === graph.rootId);
     if (
       !liveRoot ||
-      metadata.profileId !== syntheticProfileId(this.targetUrl) ||
+      metadata.targetOrigin !== canonicalizeUrl(this.targetUrl).origin ||
       metadata.origin !== liveRoot.origin ||
       metadata.pathname !== liveRoot.pathname ||
       metadata.structuralFingerprint !== liveRoot.structuralFingerprint
     )
       throw new Error(
-        "The last demonstration is structurally incompatible with the current synthetic profile.",
+        "The last demonstration is structurally incompatible with the current page.",
       );
     this.session = this.recorder!.restore(
       session,
@@ -487,7 +574,6 @@ export class StudioController {
     this.workflow = undefined;
     this.telemetry = undefined;
     this.aiPayload = undefined;
-    this.compilationDiagnostic = undefined;
     this.generalizationInstruction = "";
     this.machine.transition("DEMONSTRATION_REVIEW");
     await this.persistRecoverableState();
@@ -611,7 +697,14 @@ export class StudioController {
     }
   }
 
-  async recordCompilationDiagnostic(error: unknown, httpStatus: number) {
+  async recordDiagnostic(
+    error: unknown,
+    httpStatus: number | undefined,
+    explicitStage?:
+      | StudioCompilationStage
+      | "browser-open"
+      | "runtime-execution",
+  ) {
     const sensitiveValues = [
       ...Object.values(this.localValues).map(String),
       this.generalizationInstruction,
@@ -619,26 +712,61 @@ export class StudioController {
     const structuralEvidence = findLocatorValidationEvidence(error);
     const applicationOutcomeEvidence =
       findApplicationOutcomeValidationEvidence(error);
+    const failedTelemetryStep = this.telemetry?.steps.find(
+      (step) => step.status === "failed",
+    );
+    const compiledStep = failedTelemetryStep
+      ? this.workflow?.steps.find(
+          (step) => step.id === failedTelemetryStep.stepId,
+        )
+      : undefined;
+    const selectedLocator = compiledStep?.locatorCandidates.find(
+      (candidate) => candidate.id === compiledStep.selectedLocatorId,
+    );
     const diagnostic: StudioCompilationDiagnostic = {
-      id: createId("compile-diagnostic"),
+      id: createId("studio-diagnostic"),
       occurredAt: new Date().toISOString(),
-      httpStatus,
-      compilerStage:
-        error instanceof StudioCompilationFailure
+      ...(httpStatus !== undefined ? { httpStatus } : {}),
+      stage:
+        explicitStage ??
+        (error instanceof StudioCompilationFailure
           ? error.stage
           : error instanceof CompilationStageError
             ? error.stage
-            : "request-validation",
+            : "request-validation"),
+      workflowState: this.machine.state,
       serverMessage: safeTelemetryMessage(error, sensitiveValues),
       ...(structuralEvidence ? { structuralEvidence } : {}),
       ...(applicationOutcomeEvidence ? { applicationOutcomeEvidence } : {}),
+      ...(failedTelemetryStep ? { stepId: failedTelemetryStep.stepId } : {}),
+      ...(failedTelemetryStep
+        ? { actionType: failedTelemetryStep.action }
+        : {}),
+      ...(compiledStep?.target
+        ? {
+            targetSummary: [
+              compiledStep.target.role,
+              compiledStep.target.accessibleName,
+              compiledStep.target.associatedLabel,
+              compiledStep.target.tag,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          }
+        : {}),
+      ...(selectedLocator
+        ? { selectedLocator: selectedLocator.selectorPreview }
+        : {}),
+      ...(failedTelemetryStep
+        ? { observedReactionSummary: failedTelemetryStep.message }
+        : {}),
+      llmCalls: 0,
+      openAIRequests: 0,
     };
     this.compilationDiagnostic = diagnostic;
     this.studioEventLog.push(diagnostic);
     if (this.studioEventLog.length > 100) this.studioEventLog.shift();
-    console.error(
-      `[Studio compilation diagnostic] ${JSON.stringify(diagnostic)}`,
-    );
+    console.error(`[Studio diagnostic] ${JSON.stringify(diagnostic)}`);
     const directory = path.join(this.rootDirectory, "local-data");
     try {
       await mkdir(directory, { recursive: true });
@@ -649,10 +777,14 @@ export class StudioController {
       );
     } catch {
       console.error(
-        "[Studio compilation diagnostic] The redacted local event log could not be persisted.",
+        "[Studio diagnostic] The redacted local event log could not be persisted.",
       );
     }
     return diagnostic;
+  }
+
+  recordCompilationDiagnostic(error: unknown, httpStatus: number) {
+    return this.recordDiagnostic(error, httpStatus);
   }
 
   clearCompilationDiagnostic() {
@@ -660,6 +792,10 @@ export class StudioController {
   }
 
   async resetSyntheticFixture() {
+    if (!this.testMode)
+      throw new Error(
+        "Synthetic fixture reset is available only in automated test mode.",
+      );
     if (!this.browser.status().open)
       throw new Error("Open the managed browser before resetting the fixture.");
     if (
@@ -684,9 +820,13 @@ export class StudioController {
     if (!this.workflow)
       throw new Error("Compile a workflow before running it.");
     if (
-      !["READY_TO_RUN", "PASSED", "FAILED", "STOPPED"].includes(
-        this.machine.state,
-      )
+      ![
+        "READY_TO_RUN",
+        "PASSED",
+        "COMPLETED_UNVERIFIED",
+        "FAILED",
+        "STOPPED",
+      ].includes(this.machine.state)
     )
       throw new Error("Studio is not ready to run.");
     this.#mutation = "run";
@@ -707,10 +847,19 @@ export class StudioController {
       this.machine.transition(
         this.telemetry.state === "Passed"
           ? "PASSED"
-          : this.telemetry.state === "Stopped"
-            ? "STOPPED"
-            : "FAILED",
+          : this.telemetry.state === "CompletedUnverified"
+            ? "COMPLETED_UNVERIFIED"
+            : this.telemetry.state === "Stopped"
+              ? "STOPPED"
+              : "FAILED",
       );
+      if (this.telemetry.state === "Failed") {
+        await this.recordDiagnostic(
+          this.telemetry.error ?? "Runtime execution failed.",
+          422,
+          "runtime-execution",
+        );
+      }
       await this.persistRecoverableState();
       return this.telemetry;
     } finally {
@@ -736,8 +885,6 @@ export class StudioController {
 
   async reset() {
     this.#abortController?.abort();
-    await this.browser.close();
-    this.recorder = undefined;
     this.session = undefined;
     this.workflow = undefined;
     this.telemetry = undefined;
@@ -745,6 +892,10 @@ export class StudioController {
     this.localValues = {};
     this.generalizationInstruction = "";
     this.machine.reset();
+    if (this.browser.status().open) {
+      this.machine.transition("BROWSER_OPEN");
+      this.machine.transition("READY_TO_TEACH");
+    }
     await this.persistRecoverableState();
   }
 
@@ -816,15 +967,11 @@ export function createStudioServer(controller = new StudioController()) {
       if (request.method === "GET" && url.pathname === "/api/state")
         return sendJson(response, 200, redactObject(controller.snapshot()));
       if (request.method === "POST" && url.pathname === "/api/browser/open") {
-        const body = await readJson(request);
-        await controller.openBrowser(body.targetUrl);
+        await controller.reopenBrowser();
         return sendJson(response, 200, controller.snapshot());
       }
-      if (
-        request.method === "POST" &&
-        url.pathname === "/api/browser/authentication-complete"
-      ) {
-        await controller.authenticationComplete();
+      if (request.method === "POST" && url.pathname === "/api/browser/home") {
+        await controller.returnHome();
         return sendJson(response, 200, controller.snapshot());
       }
       if (request.method === "POST" && url.pathname === "/api/fixture/reset") {
@@ -837,6 +984,10 @@ export function createStudioServer(controller = new StudioController()) {
       }
       if (request.method === "POST" && url.pathname === "/api/teaching/stop") {
         await controller.stopTeaching();
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (request.method === "POST" && url.pathname === "/api/teaching/clear") {
+        await controller.clearDemonstration();
         return sendJson(response, 200, controller.snapshot());
       }
       if (
@@ -903,7 +1054,10 @@ export function createStudioServer(controller = new StudioController()) {
       }
       if (
         request.method === "POST" &&
-        url.pathname === "/api/compilation-diagnostics/clear"
+        [
+          "/api/compilation-diagnostics/clear",
+          "/api/diagnostics/clear",
+        ].includes(url.pathname)
       ) {
         controller.clearCompilationDiagnostic();
         return sendJson(response, 200, controller.snapshot());
@@ -948,7 +1102,21 @@ export function createStudioServer(controller = new StudioController()) {
         });
         return;
       }
-      sendJson(response, conflict ? 409 : 400, { error: message });
+      const httpStatus = conflict ? 409 : 400;
+      const stage = url.pathname.startsWith("/api/browser/")
+        ? "browser-open"
+        : url.pathname === "/api/run"
+          ? "runtime-execution"
+          : "request-validation";
+      const diagnostic = await controller.recordDiagnostic(
+        error,
+        httpStatus,
+        stage,
+      );
+      sendJson(response, httpStatus, {
+        error: diagnostic.serverMessage,
+        diagnostic,
+      });
     }
   });
 }
@@ -956,12 +1124,14 @@ export function createStudioServer(controller = new StudioController()) {
 export async function startStudioServer(
   port = Number(process.env.VC_STUDIO_PORT ?? 3100),
   host = process.env.VC_STUDIO_HOST ?? "127.0.0.1",
+  options: StudioControllerOptions = {},
 ) {
-  const controller = new StudioController();
+  const controller = new StudioController(process.cwd(), options);
   const server = createStudioServer(controller);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => resolve());
   });
+  await controller.initialize();
   return { server, controller };
 }

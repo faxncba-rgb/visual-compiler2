@@ -209,7 +209,7 @@ describe("high-level recorder", () => {
     );
   });
 
-  it("does not select popup or unchanged-field evidence when scoped history did not increase", () => {
+  it("selects only the strongest reliable fallback when scoped history did not increase", () => {
     const candidates = deriveOutcomeCandidates({
       pageContextId: "page-main",
       before: {
@@ -244,7 +244,13 @@ describe("high-level recorder", () => {
       variableRefsInNewItem: [],
       successMarkerVisible: true,
     });
-    expect(candidates.some((candidate) => candidate.selected)).toBe(false);
+    expect(candidates.filter((candidate) => candidate.selected)).toEqual([
+      expect.objectContaining({
+        type: "popup-lifecycle",
+        observed: true,
+        required: true,
+      }),
+    ]);
     expect(
       candidates.find(
         (candidate) => candidate.type === "relative-count-increase",

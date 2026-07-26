@@ -36,10 +36,14 @@ async function withIsolatedStudio(
   );
   const previousHeadless = process.env.VC_HEADLESS;
   process.env.VC_HEADLESS = "1";
-  const controller = new StudioController(rootDirectory);
+  const controller = new StudioController(rootDirectory, {
+    testMode: true,
+    targetUrl: "http://127.0.0.1:4273/fixture?variant=A",
+  });
   const server = createStudioServer(controller);
   try {
     const studioOrigin = await listenOnEphemeralPort(server);
+    await controller.initialize();
     await operation({ controller, rootDirectory, studioOrigin });
   } finally {
     if (previousHeadless === undefined) delete process.env.VC_HEADLESS;
@@ -62,16 +66,7 @@ async function teachLegacyLayoutA(
   demonstratedValue: string,
 ) {
   await page.goto(studioOrigin);
-  await page
-    .getByRole("button", { name: "Open managed browser", exact: true })
-    .click();
-  await expect(page.locator("#studioState")).toHaveText("AUTHENTICATING");
-  await page
-    .getByRole("button", {
-      name: "Authentication complete · ready",
-      exact: true,
-    })
-    .click();
+  await expect(page.locator("#studioState")).toHaveText("READY_TO_TEACH");
   await page
     .getByRole("button", { name: "Start teaching", exact: true })
     .click();
@@ -156,39 +151,10 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       studioOrigin,
       demonstratedValue,
     );
-    await expect(
-      page.getByText("Consultation history increased by one — recommended", {
-        exact: true,
-      }),
-    ).toBeVisible();
-    await expect(
-      page.getByLabel("Select Consultation history increased by one", {
-        exact: true,
-      }),
-    ).toBeChecked();
-    const requireHistory = page.getByLabel(
-      "Require Consultation history increased by one",
-      { exact: true },
+    await expect(page.locator("#demonstrationSummary")).toContainText(
+      "outcome VERIFIED",
     );
-    await expect(requireHistory).toBeChecked();
-    await requireHistory.uncheck();
-    await expect
-      .poll(
-        () =>
-          controller.session?.outcomeCandidates.find(
-            (candidate) => candidate.type === "relative-count-increase",
-          )?.required,
-      )
-      .toBe(false);
-    await requireHistory.check();
-    await expect
-      .poll(
-        () =>
-          controller.session?.outcomeCandidates.find(
-            (candidate) => candidate.type === "relative-count-increase",
-          )?.required,
-      )
-      .toBe(true);
+    expect(controller.session?.outcomeVerification).toBe("VERIFIED");
     expect(controller.session?.effectReconciliation).toMatchObject({
       status: "stable",
       popupOpened: true,
@@ -197,6 +163,9 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       pageContextReturned: true,
       editorResetObserved: true,
     });
+    expect(
+      controller.session?.actions.map((action) => action.sequence),
+    ).toEqual(controller.session?.actions.map((_, index) => index + 1));
     expect(controller.session?.outcomeCandidates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -206,39 +175,40 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
         }),
       ]),
     );
+    expect(
+      controller.session?.outcomeCandidates.filter(
+        (candidate) => candidate.selected,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "relative-count-increase",
+        required: true,
+      }),
+    ]);
     expect(JSON.stringify(controller.session)).not.toContain(demonstratedValue);
 
     await page.getByRole("button", { name: "Compile", exact: true }).click();
 
     await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
     await expect(page.locator("#toast")).toHaveText(
-      "Validated artifact compiled. Animated and local run are both ready.",
+      "Local artifact compiled and ready to run.",
     );
     await expect(page.locator("#toast")).not.toHaveClass(/error/);
     await expect(page.locator("#compilationDiagnostics")).toBeHidden();
     expect(controller.workflow?.compileMode).toBe("direct-demonstration");
-    expect(controller.workflow?.expectedOutcome.positiveEvidence).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
+    expect(controller.workflow?.expectedOutcome).toMatchObject({
+      verification: "VERIFIED",
+      requireAllPositive: true,
+      positiveEvidence: [
+        {
           type: "relative-count-increase",
           target: "[data-vc-consultation-history] > li",
           expected: 1,
           required: true,
-        }),
-        expect.objectContaining({ type: "popup-closed", required: true }),
-        expect.objectContaining({ type: "navigation", required: true }),
-        expect.objectContaining({
-          type: "field-unchanged",
-          target: '[name="date_consultation"]',
-          required: true,
-        }),
-        expect.objectContaining({
-          type: "field-unchanged",
-          target: '[name="heure_consultation"]',
-          required: true,
-        }),
-      ]),
-    );
+          pageContextId: expect.any(String),
+        },
+      ],
+    });
     expect(
       controller.workflow?.steps.find((step) => step.action === "fill")?.target
         ?.associatedLabel,
@@ -315,6 +285,20 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       sameSemanticContainer: true,
       savesPreviousEditor: true,
     });
+    const saveAction = controller.session?.actions.find(
+      (action) => action.id === saveStep?.sourceActionId,
+    );
+    expect(saveAction?.resultingState).toMatchObject({
+      pageContextId: expect.any(String),
+      fingerprint: expect.any(String),
+    });
+    expect(
+      controller.session?.actions
+        .filter((action) =>
+          ["popup-open", "popup-close", "navigation"].includes(action.action),
+        )
+        .every((action) => action.causedByActionId === saveAction?.id),
+    ).toBe(true);
     expect(selectedSaveLocator).toMatchObject({
       matchCount: 1,
       visibleCount: 1,
@@ -336,6 +320,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       demonstratedValue,
     );
     const replayValue = "SYNTHETIC-UPDATED-RUNTIME-VALUE";
+    await page.locator("#advancedDetails > summary").click();
     const localValueInput = page.getByLabel("consultation_text local value", {
       exact: true,
     });
@@ -403,12 +388,7 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
       controller.browser.mainPage.locator('[name="heure_consultation"]'),
     ).toHaveValue(initialSchedule.time);
 
-    await page
-      .getByRole("button", {
-        name: "Reset synthetic fixture",
-        exact: true,
-      })
-      .click();
+    await controller.resetSyntheticFixture();
     await expect(
       controller.browser.mainPage.locator(
         "[data-vc-consultation-history] > li",
@@ -421,20 +401,11 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
   });
 });
 
-test("fill without Enregistrer exposes missing positive evidence before compile", async ({
+test("fill without Enregistrer compiles and runs as COMPLETED_UNVERIFIED", async ({
   page,
 }) => {
   await withIsolatedStudio(async ({ controller, studioOrigin }) => {
     await page.goto(studioOrigin);
-    await page
-      .getByRole("button", { name: "Open managed browser", exact: true })
-      .click();
-    await page
-      .getByRole("button", {
-        name: "Authentication complete · ready",
-        exact: true,
-      })
-      .click();
     await page
       .getByRole("button", { name: "Start teaching", exact: true })
       .click();
@@ -449,38 +420,28 @@ test("fill without Enregistrer exposes missing positive evidence before compile"
     await expect(page.locator("#studioState")).toHaveText(
       "DEMONSTRATION_REVIEW",
     );
-    await expect(
-      page.getByText("Scoped consultation-history count did not increase.", {
-        exact: true,
-      }),
-    ).toBeVisible();
+    expect(controller.session?.outcomeVerification).toBe("UNVERIFIED");
     await expect(
       page.getByRole("button", { name: "Compile", exact: true }),
-    ).toBeDisabled();
-    const response = await page.evaluate(async () => {
-      const result = await fetch("/api/compile", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ instruction: "" }),
-      });
-      return { status: result.status, body: await result.json() };
+    ).toBeEnabled();
+    await page.getByRole("button", { name: "Compile", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+    expect(controller.workflow?.expectedOutcome).toMatchObject({
+      positiveEvidence: [],
+      requireAllPositive: false,
+      verification: "UNVERIFIED",
     });
-    expect(response.status).toBe(422);
-    expect(response.body.diagnostic).toMatchObject({
-      compilerStage: "application-outcome-validation",
-      applicationOutcomeEvidence: {
-        reconciliationStatus: "legacy-insufficient",
-        popupLifecycleObserved: false,
-        pageContextReturned: false,
-        editorResetObserved: false,
-      },
-    });
-    expect(
-      response.body.diagnostic.applicationOutcomeEvidence,
-    ).not.toHaveProperty("selectedPositiveOutcome");
-    expect(JSON.stringify(response.body)).not.toContain(
-      "SYNTHETIC-NO-SAVE-OUTCOME",
+    await page
+      .getByRole("button", { name: "Run locally", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "COMPLETED_UNVERIFIED",
     );
+    expect(controller.telemetry).toMatchObject({
+      state: "CompletedUnverified",
+      llmCalls: 0,
+      openAIRequests: 0,
+    });
   });
 });
 
@@ -532,15 +493,6 @@ test("Stop teaching reconciles popup, rerender and history effects that arrive a
 }) => {
   await withIsolatedStudio(async ({ controller, studioOrigin }) => {
     await page.goto(studioOrigin);
-    await page
-      .getByRole("button", { name: "Open managed browser", exact: true })
-      .click();
-    await page
-      .getByRole("button", {
-        name: "Authentication complete · ready",
-        exact: true,
-      })
-      .click();
     await page
       .getByRole("button", { name: "Start teaching", exact: true })
       .click();
@@ -646,10 +598,7 @@ test("a locator 422 exposes structural evidence and can be corrected and retried
     await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
       '"sameFormMatchCount":',
     );
-    const retry = page.getByRole("button", {
-      name: "Retry compile",
-      exact: true,
-    });
+    const retry = page.locator("#retryDiagnostic");
     await expect(retry).toBeEnabled();
     expect(controller.session?.id).toBe(sessionId);
     expect(controller.session?.actions.length).toBe(demonstratedActionCount);
@@ -667,7 +616,7 @@ test("a locator 422 exposes structural evidence and can be corrected and retried
   });
 });
 
-test("the last completed synthetic demonstration restores after a Studio restart only on a compatible profile", async ({
+test("the last completed synthetic demonstration restores after a Studio restart only on a compatible page", async ({
   page,
 }) => {
   await withIsolatedStudio(
@@ -703,27 +652,16 @@ test("the last completed synthetic demonstration restores after a Studio restart
       });
       await controller.browser.close();
 
-      const incompatibleController = new StudioController(rootDirectory);
+      const incompatibleController = new StudioController(rootDirectory, {
+        testMode: true,
+        targetUrl: "http://127.0.0.1:4273/fixture?variant=B",
+      });
       const incompatibleServer = createStudioServer(incompatibleController);
       try {
         const incompatibleOrigin =
           await listenOnEphemeralPort(incompatibleServer);
+        await incompatibleController.initialize();
         await page.goto(incompatibleOrigin);
-        await page
-          .getByLabel("Synthetic application profile", { exact: true })
-          .selectOption("http://127.0.0.1:4273/fixture?variant=B");
-        await page
-          .getByRole("button", {
-            name: "Open managed browser",
-            exact: true,
-          })
-          .click();
-        await page
-          .getByRole("button", {
-            name: "Authentication complete · ready",
-            exact: true,
-          })
-          .click();
         await expect(
           page.getByRole("button", {
             name: "Restore last demonstration",
@@ -731,36 +669,28 @@ test("the last completed synthetic demonstration restores after a Studio restart
           }),
         ).toBeDisabled();
         await expect(page.locator("#lastDemonstrationStatus")).toContainText(
-          "structurally incompatible",
+          "does not match the current page structure",
         );
       } finally {
         await closeStudioServer(incompatibleServer, incompatibleController);
       }
 
-      const restoredController = new StudioController(rootDirectory);
+      const restoredController = new StudioController(rootDirectory, {
+        testMode: true,
+        targetUrl: "http://127.0.0.1:4273/fixture?variant=A",
+      });
       const restoredServer = createStudioServer(restoredController);
       try {
         const restoredOrigin = await listenOnEphemeralPort(restoredServer);
+        await restoredController.initialize();
         await page.goto(restoredOrigin);
-        await page
-          .getByRole("button", {
-            name: "Open managed browser",
-            exact: true,
-          })
-          .click();
-        await page
-          .getByRole("button", {
-            name: "Authentication complete · ready",
-            exact: true,
-          })
-          .click();
         const restore = page.getByRole("button", {
           name: "Restore last demonstration",
           exact: true,
         });
         await expect(restore).toBeEnabled();
         await expect(page.locator("#lastDemonstrationStatus")).toContainText(
-          "structure compatible",
+          "compatible local demonstration",
         );
         await restore.click();
         await expect(page.locator("#studioState")).toHaveText(
@@ -835,12 +765,7 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
           "DEMONSTRATION_REVIEW",
         );
         await expect(page.locator("#compilationDiagnostics")).toBeVisible();
-        await expect(
-          page.getByRole("button", {
-            name: "Retry compile",
-            exact: true,
-          }),
-        ).toBeEnabled();
+        await expect(page.locator("#retryDiagnostic")).toBeEnabled();
       } finally {
         console.error = originalConsoleError;
       }
@@ -879,12 +804,13 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
         .click();
       const copied = await page.evaluate(() => navigator.clipboard.readText());
       expect(copied).toContain("HTTP status: 422");
-      expect(copied).toContain("Compiler stage: artifact-persistence");
+      expect(copied).toContain("Stage: artifact-persistence");
       expect(copied).toContain(message);
       expect(copied).not.toContain(demonstratedValue);
 
+      await page.locator("#advancedDetails > summary").click();
       await page
-        .getByRole("button", { name: "Studio log", exact: true })
+        .getByText("Persistent Studio event log", { exact: true })
         .click();
       await expect(page.locator("#studioEventLog")).toContainText(message);
       const persistedLog = await readFile(
@@ -902,6 +828,13 @@ test("compile failures remain redacted, persistent, copyable and locally logged"
       expect(diagnostic).toBeDefined();
       expect(terminalMessages.join("\n")).toContain(JSON.stringify(diagnostic));
       expect(terminalMessages.join("\n")).not.toContain(demonstratedValue);
+
+      await controller.reset();
+      await page.reload();
+      await expect(page.locator("#compilationDiagnostics")).toBeVisible();
+      await expect(page.locator("#diagnosticServerMessage")).toHaveText(
+        message,
+      );
 
       await page.getByRole("button", { name: "Clear", exact: true }).click();
       await expect(page.locator("#compilationDiagnostics")).toBeHidden();

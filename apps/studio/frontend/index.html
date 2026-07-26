@@ -5,309 +5,260 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Teach browser workflows once and replay them locally without an LLM."
+      content="Teach an authorized browser workflow and replay it locally without an LLM."
     />
     <title>Visual Compiler 2 · Lab Studio</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="lab-banner" role="status">
-      LAB MODE — synthetic test records only
-    </div>
+    <div class="lab-banner" role="status">LAB MODE</div>
+
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">VC²</span>
         <div>
           <h1>Visual Compiler 2</h1>
-          <p>Teach once. Compile once. Run locally forever.</p>
+          <p>Teach once. Compile locally. Replay deterministically.</p>
         </div>
       </div>
       <div class="status-ribbon" aria-label="System status">
-        <span class="status-chip"
-          >Studio <strong id="studioState">IDLE</strong></span
-        >
-        <span class="status-chip"
-          >Browser <strong id="browserStatus">CLOSED</strong></span
-        >
-        <span class="status-chip"
-          >Recorder <strong id="recorderStatus">OFF</strong></span
-        >
-        <span class="status-chip"
-          >Compiler <strong id="compilerStatus">WAITING</strong></span
-        >
+        <span>Studio <strong id="studioState">STARTING</strong></span>
+        <span>Browser <strong id="browserStatus">OPENING</strong></span>
+        <span>Recorder <strong id="recorderStatus">OFF</strong></span>
+        <span>Compiler <strong id="compilerStatus">WAITING</strong></span>
+        <span>Runtime <strong id="runtimeStatus">READY</strong></span>
       </div>
     </header>
 
-    <section class="metrics" aria-label="Model usage counters">
-      <article>
-        <span>Compile-time model calls</span>
-        <strong id="compileCalls">0</strong>
-      </article>
+    <section class="runtime-proof" aria-label="Runtime isolation">
       <article>
         <span>Runtime LLM calls</span>
         <strong id="runtimeLlmCalls">0</strong>
       </article>
-      <article class="zero-proof">
+      <article>
         <span>Runtime OpenAI requests</span>
         <strong id="runtimeOpenAiRequests">0</strong>
       </article>
       <p>
-        Runtime is deterministic. Local replay does not import or contact
-        OpenAI.
+        Authentication stays in the managed browser. Teaching starts only when
+        you choose <strong>Start teaching</strong>.
       </p>
     </section>
 
-    <main class="studio-grid">
-      <aside class="panel browser-panel" aria-labelledby="browser-heading">
-        <div class="panel-heading">
-          <span class="eyebrow">Managed browser</span>
-          <h2 id="browser-heading">Authorized local surface</h2>
-        </div>
+    <main class="studio-shell">
+      <nav class="flow-map" aria-label="Primary workflow">
+        <span><b>1</b> Open</span>
+        <i aria-hidden="true">→</i>
+        <span><b>2</b> Teach</span>
+        <i aria-hidden="true">→</i>
+        <span><b>3</b> Compile</span>
+        <i aria-hidden="true">→</i>
+        <span><b>4</b> Run locally</span>
+      </nav>
 
-        <label for="targetUrl">Synthetic application profile</label>
-        <select id="targetUrl">
-          <option value="http://127.0.0.1:4273/fixture?variant=A">
-            Legacy DPI · layout A
-          </option>
-          <option value="http://127.0.0.1:4273/fixture?variant=B">
-            Legacy DPI · layout B
-          </option>
-          <option
-            value="http://127.0.0.1:4273/fixture?variant=A&editor=contenteditable"
-          >
-            Contenteditable editor
-          </option>
-          <option value="http://127.0.0.1:4273/fixture?variant=A&editor=iframe">
-            Same-origin iframe editor
-          </option>
-          <option value="http://127.0.0.1:4273/fixture?variant=A&editor=facade">
-            Legacy editor facade
-          </option>
-          <option value="http://127.0.0.1:4273/fixture/popup-workflow">
-            Popup-centric workflow
-          </option>
-        </select>
-        <p class="privacy-note">
-          Live query parameters can guide the fixture but are removed from
-          artifacts and logs.
-        </p>
-
-        <div class="button-stack">
-          <button id="openBrowser" class="primary">Open managed browser</button>
-          <button id="authComplete">Authentication complete · ready</button>
-          <button id="resetSyntheticFixture">Reset synthetic fixture</button>
-        </div>
-
-        <dl class="browser-facts">
+      <section
+        id="compilationDiagnostics"
+        class="diagnostic-card"
+        aria-labelledby="diagnostics-heading"
+        aria-live="polite"
+        hidden
+      >
+        <div class="diagnostic-heading">
           <div>
-            <dt>Authentication</dt>
-            <dd>Manual only</dd>
+            <span class="eyebrow danger">Persistent failure</span>
+            <h2 id="diagnostics-heading">Compilation diagnostics</h2>
+          </div>
+          <div class="button-row">
+            <button id="retryDiagnostic" class="primary">Retry</button>
+            <button id="copyDiagnostics">Copy diagnostics</button>
+            <button id="clearDiagnostics">Clear</button>
+          </div>
+        </div>
+        <dl class="diagnostic-facts">
+          <div>
+            <dt>HTTP status</dt>
+            <dd id="diagnosticHttpStatus">—</dd>
           </div>
           <div>
-            <dt>Recording during login</dt>
-            <dd>Disabled</dd>
+            <dt>Stage</dt>
+            <dd id="diagnosticCompilerStage">—</dd>
           </div>
           <div>
-            <dt>Canonical page</dt>
-            <dd id="canonicalPage">—</dd>
+            <dt>Workflow state</dt>
+            <dd id="diagnosticWorkflowState">—</dd>
           </div>
         </dl>
-
-        <div class="subheading">
-          <h3>Page Context Graph</h3>
-          <span id="pageCount">0 contexts</span>
-        </div>
-        <ol id="pageGraph" class="page-graph">
-          <li class="empty">Open the managed browser to discover contexts.</li>
-        </ol>
-      </aside>
-
-      <section class="panel teach-panel" aria-labelledby="teach-heading">
-        <div class="panel-heading split">
-          <div>
-            <span class="eyebrow">Teach</span>
-            <h2 id="teach-heading">Demonstration timeline</h2>
-          </div>
-          <span id="recordingIndicator" class="recording-indicator">
-            Recorder idle
-          </span>
-        </div>
-
-        <div class="teach-actions">
-          <button id="startTeaching" class="primary">Start teaching</button>
-          <button id="stopTeaching" class="danger">Stop teaching</button>
-          <button id="rerecord">Re-record</button>
-          <button id="restoreLastDemonstration">
-            Restore last demonstration
-          </button>
-        </div>
-        <p id="lastDemonstrationStatus" class="privacy-note">
-          No completed local demonstration is available.
-        </p>
-
-        <ol id="timeline" class="timeline">
-          <li class="empty">
-            Authenticate, navigate to the synthetic record, then start teaching.
-          </li>
-        </ol>
-
-        <section class="variables-section" aria-labelledby="variables-heading">
-          <div class="subheading">
-            <div>
-              <h3 id="variables-heading">Local runtime variables</h3>
-              <p>Remain local and are not sent to AI by default.</p>
-            </div>
-          </div>
-          <div id="variables" class="variable-list">
-            <p class="empty">Typed demonstration values will appear here.</p>
-          </div>
-        </section>
-
-        <section
-          class="variables-section outcome-review"
-          aria-labelledby="outcome-evidence-heading"
-        >
-          <div class="subheading">
-            <div>
-              <h3 id="outcome-evidence-heading">
-                Application success evidence
-              </h3>
-              <p id="outcomeEvidenceStatus">
-                Complete and stop teaching to reconcile the stable after-state.
-              </p>
-            </div>
-          </div>
-          <div id="outcomeCandidates" class="variable-list">
-            <p class="empty">No reconciled success evidence yet.</p>
-          </div>
-          <div class="teach-actions">
-            <button id="recaptureOutcome" type="button">
-              Capture current stable state again
-            </button>
-            <button id="useCurrentOutcome" type="button">
-              Use current state as demonstrated success
-            </button>
-          </div>
-        </section>
-
-        <section
-          class="generalization"
-          aria-labelledby="generalization-heading"
-        >
-          <span class="eyebrow ai">Optional compile-time AI boundary</span>
-          <h3 id="generalization-heading">AI generalization instructions</h3>
-          <p>
-            Only this instruction and the redacted structural preview below are
-            intentionally presented to the mocked compiler.
-          </p>
-          <label for="generalizationInstruction">Instruction</label>
-          <textarea
-            id="generalizationInstruction"
-            placeholder="Example: Repeat the demonstrated actions on each following eligible row until no eligible row remains."
-          ></textarea>
-          <div class="compile-row">
-            <span id="compileMode" class="mode-pill"
-              >direct-demonstration compiler</span
-            >
-            <button id="compile" class="compile-button">Compile</button>
-          </div>
-          <details>
-            <summary>Payload sent to AI · redacted preview</summary>
-            <pre id="payloadPreview">No payload prepared.</pre>
-          </details>
-          <section
-            id="compilationDiagnostics"
-            class="compilation-diagnostics"
-            aria-labelledby="compilation-diagnostics-heading"
-            aria-live="polite"
-            hidden
-          >
-            <div class="diagnostics-heading">
-              <div>
-                <span class="eyebrow diagnostics">Persistent error</span>
-                <h4 id="compilation-diagnostics-heading">
-                  Compilation diagnostics
-                </h4>
-              </div>
-              <div class="diagnostics-actions">
-                <button id="copyDiagnostics" type="button">
-                  Copy diagnostics
-                </button>
-                <button id="clearDiagnostics" type="button">Clear</button>
-              </div>
-            </div>
-            <dl class="diagnostics-facts">
-              <div>
-                <dt>HTTP status</dt>
-                <dd id="diagnosticHttpStatus">—</dd>
-              </div>
-              <div>
-                <dt>Compiler stage</dt>
-                <dd id="diagnosticCompilerStage">—</dd>
-              </div>
-            </dl>
-            <span class="diagnostic-label">Redacted server message</span>
-            <pre id="diagnosticServerMessage"></pre>
-            <span class="diagnostic-label">Redacted structural evidence</span>
-            <pre id="diagnosticStructuralEvidence"></pre>
-          </section>
-        </section>
+        <pre id="diagnosticServerMessage"></pre>
+        <details>
+          <summary>Advanced technical details</summary>
+          <pre id="diagnosticStructuralEvidence"></pre>
+        </details>
       </section>
 
-      <aside class="panel workflow-panel" aria-labelledby="workflow-heading">
-        <div class="panel-heading">
-          <span class="eyebrow">Workflow</span>
-          <h2 id="workflow-heading">Evidence & artifact</h2>
-        </div>
-        <nav class="tabs" aria-label="Workflow details">
-          <button class="tab active" data-tab="demonstration">
-            Demonstration
-          </button>
-          <button class="tab" data-tab="compiled">Compiled</button>
-          <button class="tab" data-tab="locators">Locators</button>
-          <button class="tab" data-tab="generated">Generated</button>
-          <button class="tab" data-tab="runtime">Runtime log</button>
-          <button class="tab" data-tab="studio-events">Studio log</button>
-        </nav>
-        <section class="tab-panel active" data-panel="demonstration">
-          <pre id="demonstrationJson">No demonstration recorded.</pre>
-        </section>
-        <section class="tab-panel" data-panel="compiled">
-          <pre id="compiledJson">No workflow compiled.</pre>
-        </section>
-        <section class="tab-panel" data-panel="locators">
-          <div id="locatorCards" class="locator-cards">
-            <p class="empty">Locator candidates appear after compilation.</p>
+      <section class="flow-grid">
+        <article class="flow-card" aria-labelledby="browser-heading">
+          <div class="step-heading">
+            <span class="step-number">1</span>
+            <div>
+              <span class="eyebrow">Open</span>
+              <h2 id="browser-heading">Managed browser</h2>
+            </div>
           </div>
-        </section>
-        <section class="tab-panel" data-panel="generated">
+          <p id="browserGuidance" class="lead">
+            The dedicated browser is opening automatically.
+          </p>
+          <dl class="compact-facts">
+            <div>
+              <dt>Current page</dt>
+              <dd id="canonicalPage">—</dd>
+            </div>
+            <div>
+              <dt>Authentication</dt>
+              <dd>Manual in browser</dd>
+            </div>
+          </dl>
+          <div class="button-row">
+            <button id="reopenBrowser">Reopen managed browser</button>
+            <button id="returnHome">Return to DPI home</button>
+          </div>
+        </article>
+
+        <article class="flow-card teach-card" aria-labelledby="teach-heading">
+          <div class="step-heading">
+            <span class="step-number">2</span>
+            <div>
+              <span class="eyebrow">Teach</span>
+              <h2 id="teach-heading">Demonstration</h2>
+            </div>
+            <span id="recordingIndicator" class="recording-indicator">
+              Recorder idle
+            </span>
+          </div>
+          <div class="button-row">
+            <button id="startTeaching" class="primary">Start teaching</button>
+            <button id="stopTeaching" class="danger">Stop teaching</button>
+            <button id="clearDemonstration">Clear demonstration</button>
+            <button id="restoreLastDemonstration">
+              Restore last demonstration
+            </button>
+          </div>
+          <p id="lastDemonstrationStatus" class="supporting">
+            No completed local demonstration is available.
+          </p>
+          <ol id="timeline" class="timeline">
+            <li class="empty">
+              Authenticate and navigate in the managed browser, then start
+              teaching.
+            </li>
+          </ol>
+        </article>
+
+        <article class="flow-card" aria-labelledby="compile-heading">
+          <div class="step-heading">
+            <span class="step-number">3</span>
+            <div>
+              <span class="eyebrow">Compile</span>
+              <h2 id="compile-heading">Local artifact</h2>
+            </div>
+          </div>
+          <div id="demonstrationSummary" class="summary-box">
+            Stop teaching to prepare a demonstration.
+          </div>
+          <details id="optionalAiDetails" class="optional-ai">
+            <summary>Optional AI generalization</summary>
+            <p>
+              Leave empty for direct local compilation. Development uses no live
+              model.
+            </p>
+            <label for="generalizationInstruction">Instruction</label>
+            <textarea
+              id="generalizationInstruction"
+              placeholder="Example: Repeat the demonstrated actions on each following eligible row until no eligible row remains."
+            ></textarea>
+          </details>
+          <div class="compile-row">
+            <span id="compileMode" class="mode-pill">
+              Direct local compilation — no AI call
+            </span>
+            <button id="compile" class="primary">Compile</button>
+          </div>
+        </article>
+
+        <article class="flow-card" aria-labelledby="run-heading">
+          <div class="step-heading">
+            <span class="step-number">4</span>
+            <div>
+              <span class="eyebrow">Run</span>
+              <h2 id="run-heading">Deterministic replay</h2>
+            </div>
+          </div>
+          <p id="runtimeState" class="lead">
+            Compile a demonstration to run it.
+          </p>
+          <div class="button-row run-actions">
+            <button id="localRun" class="primary">Run locally</button>
+            <button id="animatedRun">1st run — animated</button>
+            <button id="runAgain">Run again</button>
+            <button id="stopAll" class="danger">Stop</button>
+            <button id="reset">Reset workflow</button>
+          </div>
+        </article>
+      </section>
+
+      <details id="advancedDetails" class="advanced">
+        <summary>Advanced details</summary>
+        <div class="advanced-grid">
+          <section>
+            <h3>Page Context Graph <span id="pageCount">0 contexts</span></h3>
+            <ol id="pageGraph" class="page-graph">
+              <li class="empty">No browser contexts yet.</li>
+            </ol>
+          </section>
+          <section>
+            <h3>Local runtime variables</h3>
+            <div id="variables" class="variable-list">
+              <p class="empty">No local variables yet.</p>
+            </div>
+          </section>
+          <section>
+            <h3>Derived outcome evidence</h3>
+            <div id="outcomeCandidates">
+              <p class="empty">No outcome candidates yet.</p>
+            </div>
+          </section>
+          <section>
+            <h3>Locator candidates</h3>
+            <div id="locatorCandidates">No workflow compiled.</div>
+          </section>
+        </div>
+        <details>
+          <summary>Demonstration IR</summary>
+          <pre id="demonstrationJson">No demonstration recorded.</pre>
+        </details>
+        <details>
+          <summary>Compiled workflow</summary>
+          <pre id="compiledJson">No workflow compiled.</pre>
+        </details>
+        <details>
+          <summary>Generated Playwright outline</summary>
           <pre id="generatedCode">No deterministic outline generated.</pre>
-        </section>
-        <section class="tab-panel" data-panel="runtime">
+        </details>
+        <details>
+          <summary>Redacted AI payload preview</summary>
+          <pre id="payloadPreview">No payload prepared.</pre>
+        </details>
+        <details>
+          <summary>Runtime log</summary>
           <pre id="runtimeLog">No local run yet.</pre>
-        </section>
-        <section class="tab-panel" data-panel="studio-events">
+        </details>
+        <details>
+          <summary>Persistent Studio event log</summary>
           <pre id="studioEventLog">No persistent Studio events yet.</pre>
-        </section>
-      </aside>
+        </details>
+      </details>
     </main>
 
-    <footer class="execution-dock" aria-label="Workflow execution">
-      <div>
-        <span class="eyebrow">Compiled artifact execution</span>
-        <strong id="runtimeState">Ready when compiled</strong>
-        <small>Lab Mode defaults to fast local replay.</small>
-      </div>
-      <div class="execution-actions">
-        <button id="animatedRun" class="animated">1st run — animated</button>
-        <button id="localRun" class="primary">Run locally</button>
-        <button id="runAgain">Run again</button>
-        <button id="stopAll" class="danger">Stop</button>
-        <button id="reset">Reset</button>
-      </div>
-    </footer>
-
-    <div id="toast" role="alert" aria-live="polite"></div>
-    <script src="/app.js" type="module"></script>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

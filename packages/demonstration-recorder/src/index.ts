@@ -288,6 +288,14 @@ export function deriveOutcomeCandidates(
       }),
     );
   }
+  const strongest = candidates
+    .filter((candidate) => candidate.observed)
+    .sort((left, right) => right.confidence - left.confidence)[0];
+  for (const candidate of candidates) {
+    candidate.selected = candidate.id === strongest?.id;
+    candidate.required = candidate.id === strongest?.id;
+    candidate.recommended = candidate.id === strongest?.id;
+  }
   return candidates;
 }
 
@@ -496,6 +504,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
       readonly: element.hasAttribute('readonly'),
       visible: box.width > 0 && box.height > 0,
       enabled: !element.hasAttribute('disabled'),
+      checked: element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type) ? element.checked : undefined,
+      selected: element instanceof HTMLSelectElement ? element.selectedIndex >= 0 : undefined,
       formName: element.closest('form')?.getAttribute('name') || undefined,
       semanticContainer: semantic,
       parent: parent ? { tag: parent.tagName.toLowerCase(), role: role(parent), accessibleName: accessibleName(parent) || undefined } : undefined,
@@ -559,6 +569,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
   }, true);
   document.addEventListener('input', event => {
     const element = event.target;
+    if (element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type)) return;
     const info = target(element);
     if (!info || info.password) return;
     const existing = pendingInputs.get(element);
@@ -570,6 +581,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
   }, true);
   document.addEventListener('change', event => {
     const element = event.target;
+    if (element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type)) return;
     const info = target(element);
     if (!info || info.password) return;
     const existing = pendingInputs.get(element);
@@ -581,9 +593,17 @@ const RECORDER_INIT_SCRIPT = `(() => {
     sendValue(element, info, kind);
   }, true);
   document.addEventListener('keydown', event => {
-    if (!['Enter','Escape','Tab','ArrowDown','ArrowUp'].includes(event.key)) return;
+    const modifiers = [
+      event.metaKey ? 'Meta' : '',
+      event.ctrlKey ? 'Control' : '',
+      event.altKey ? 'Alt' : '',
+      event.shiftKey ? 'Shift' : ''
+    ].filter(Boolean);
+    const meaningful = ['Enter','Escape','Tab','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key);
+    if (!meaningful && modifiers.length === 0) return;
     const info = target(event.target);
-    if (!info?.password) send({ kind: 'keyboard', target: info, key: event.key, occurredAt: Date.now() });
+    const key = [...modifiers, event.key].join('+');
+    if (!info?.password) send({ kind: 'keyboard', target: info, key, occurredAt: Date.now() });
   }, true);
   document.addEventListener('submit', event => {
     const raw = event.submitter || event.target;
@@ -752,6 +772,7 @@ export function deduplicateAction(
     Math.abs(previous.timestampOffsetMs - candidate.timestampOffsetMs) <=
       windowMs
   ) {
+    candidate.sequence = previous.sequence;
     actions[actions.length - 1] = candidate;
     return "replaced" as const;
   }
@@ -794,6 +815,7 @@ export class DemonstrationRecorder {
   #active = false;
   #session: MutableSession | undefined;
   #startedAtMs = 0;
+  #nextSequence = 1;
   #localValues = new Map<string, string>();
   #passwordEventsExcluded = 0;
   #crossOriginEventsExcluded = 0;
@@ -895,6 +917,7 @@ export class DemonstrationRecorder {
     const now = new Date();
     const graph = this.graph.data();
     this.#startedAtMs = now.getTime();
+    this.#nextSequence = 1;
     this.#localValues.clear();
     this.#saveObservation = undefined;
     this.#session = {
@@ -905,6 +928,7 @@ export class DemonstrationRecorder {
       actions: [],
       variables: [],
       outcomeCandidates: [],
+      outcomeVerification: "UNVERIFIED",
       beforeState: await this.#snapshot(),
       authenticationExcluded: true,
     };
@@ -915,7 +939,22 @@ export class DemonstrationRecorder {
 
   restore(session: DemonstrationSession, localValues: Record<string, string>) {
     if (this.#active) throw new Error("Stop teaching before restoring.");
-    const parsed = DemonstrationSessionSchema.parse(session);
+    const migrated = {
+      ...session,
+      actions: session.actions.map((action, index) => ({
+        ...action,
+        sequence: action.sequence ?? index + 1,
+      })),
+      outcomeVerification:
+        session.outcomeVerification !== "UNVERIFIED"
+          ? session.outcomeVerification
+          : session.outcomeCandidates.some((candidate) => candidate.observed)
+            ? session.effectReconciliation?.status === "stable"
+              ? "VERIFIED"
+              : "PARTIALLY_VERIFIED"
+            : "UNVERIFIED",
+    };
+    const parsed = DemonstrationSessionSchema.parse(migrated);
     if (!parsed.stoppedAt)
       throw new Error("Only a completed demonstration can be restored.");
     this.#session = {
@@ -940,6 +979,10 @@ export class DemonstrationRecorder {
     this.#session.actions.sort(
       (left, right) => left.timestampOffsetMs - right.timestampOffsetMs,
     );
+    this.#session.actions.forEach((action, index) => {
+      action.sequence = index + 1;
+    });
+    this.#nextSequence = this.#session.actions.length + 1;
     await this.#reconcileOutcomeEffects(stability);
     return this.session;
   }
@@ -966,10 +1009,10 @@ export class DemonstrationRecorder {
     };
   }
 
-  async #waitForDomStability(): Promise<DomStabilityResult> {
-    const quietPeriodMs = this.options.domQuietPeriodMs ?? 500;
-    const maximumObservationMs =
-      this.options.maximumFinalReconciliationMs ?? 5_000;
+  async #waitForDomStability(
+    quietPeriodMs = this.options.domQuietPeriodMs ?? 500,
+    maximumObservationMs = this.options.maximumFinalReconciliationMs ?? 5_000,
+  ): Promise<DomStabilityResult> {
     const page = this.context
       .pages()
       .find((candidate) => !candidate.isClosed());
@@ -1322,6 +1365,14 @@ export class DemonstrationRecorder {
       editorResetObserved,
       reconciledAt: new Date().toISOString(),
     });
+    const strongestOutcome = this.#session.outcomeCandidates
+      .filter((candidate) => candidate.observed)
+      .sort((left, right) => right.confidence - left.confidence)[0];
+    this.#session.outcomeVerification = !strongestOutcome
+      ? "UNVERIFIED"
+      : stability.stable && strongestOutcome.confidence >= 0.85
+        ? "VERIFIED"
+        : "PARTIALLY_VERIFIED";
     if (!sourceAction) return;
     const effects: ObservedEffect[] = [
       {
@@ -1554,6 +1605,7 @@ export class DemonstrationRecorder {
         : undefined;
     const recorded = RecordedActionSchema.parse({
       id: createId("action"),
+      sequence: this.#nextSequence++,
       pageContextId,
       action: payload.kind,
       name: `${pageLabel(graphNode?.role ?? "main")} — ${actionLabel(payload.kind, payload.target)}`,
@@ -1565,7 +1617,18 @@ export class DemonstrationRecorder {
       timestampOffsetMs: Math.max(0, payload.occurredAt - this.#startedAtMs),
       optional: false,
     });
-    deduplicateAction(this.#session.actions, recorded);
+    const disposition = deduplicateAction(this.#session.actions, recorded);
+    const persistedAction =
+      disposition === "added"
+        ? recorded
+        : [...this.#session.actions]
+            .reverse()
+            .find(
+              (action) =>
+                action.action === recorded.action &&
+                action.pageContextId === recorded.pageContextId &&
+                action.target?.fingerprint === recorded.target?.fingerprint,
+            );
     if (
       sequenceContext?.savesPreviousEditor &&
       payload.applicationStateBeforeAction
@@ -1595,6 +1658,35 @@ export class DemonstrationRecorder {
           payload.applicationStateBeforeAction.errorMarkerVisible,
       });
     }
+    if (persistedAction) {
+      const reaction = await this.#waitForDomStability(120, 900);
+      persistedAction.resultingState = await this.#snapshot();
+      if (
+        reaction.mutationCount > 0 &&
+        !persistedAction.observedEffects.some(
+          (effect) => effect.type === "dom-change",
+        )
+      ) {
+        persistedAction.observedEffects.push({
+          type: "dom-change",
+          pageContextId,
+          description: `${reaction.mutationCount} structural DOM mutation${reaction.mutationCount === 1 ? "" : "s"} observed after the action.`,
+        });
+      }
+      if (
+        !persistedAction.observedEffects.some(
+          (effect) => effect.type === "stability-reconciled",
+        )
+      ) {
+        persistedAction.observedEffects.push({
+          type: "stability-reconciled",
+          pageContextId,
+          description: reaction.stable
+            ? "The website reached a bounded stable state after the action."
+            : "The bounded reaction window ended before DOM quiet.",
+        });
+      }
+    }
   }
 
   #handleGraphEvent(event: PageGraphEvent) {
@@ -1602,10 +1694,25 @@ export class DemonstrationRecorder {
     this.#session.pageGraph = this.graph.data();
     this.#session.pages = this.#session.pageGraph.nodes;
     const timestampOffsetMs = Math.max(0, Date.now() - this.#startedAtMs);
+    const causedByActionId = [...this.#session.actions]
+      .reverse()
+      .find((action) =>
+        [
+          "click",
+          "double-click",
+          "fill",
+          "select",
+          "check",
+          "uncheck",
+          "keyboard",
+          "submit",
+        ].includes(action.action),
+      )?.id;
     if (event.type === "page-open" && event.context.role === "popup") {
       this.#session.actions.push(
         RecordedActionSchema.parse({
           id: createId("action"),
+          sequence: this.#nextSequence++,
           pageContextId: event.context.id,
           action: "popup-open",
           name: "Validation popup — opened",
@@ -1616,6 +1723,7 @@ export class DemonstrationRecorder {
               description: "Popup opened from the demonstrated action.",
             },
           ],
+          ...(causedByActionId ? { causedByActionId } : {}),
           timestampOffsetMs,
           optional: false,
         }),
@@ -1624,6 +1732,7 @@ export class DemonstrationRecorder {
       this.#session.actions.push(
         RecordedActionSchema.parse({
           id: createId("action"),
+          sequence: this.#nextSequence++,
           pageContextId: event.context.id,
           action: "popup-close",
           name: "Validation popup — closed",
@@ -1634,6 +1743,7 @@ export class DemonstrationRecorder {
               description: "Popup closed and focus returned to its opener.",
             },
           ],
+          ...(causedByActionId ? { causedByActionId } : {}),
           timestampOffsetMs,
           optional: false,
         }),
@@ -1642,6 +1752,7 @@ export class DemonstrationRecorder {
       this.#session.actions.push(
         RecordedActionSchema.parse({
           id: createId("action"),
+          sequence: this.#nextSequence++,
           pageContextId: event.context.id,
           action: "navigation",
           name: `${pageLabel(event.context.role)} — navigated`,
@@ -1653,6 +1764,7 @@ export class DemonstrationRecorder {
               description: `${event.context.origin}${event.context.pathname}`,
             },
           ],
+          ...(causedByActionId ? { causedByActionId } : {}),
           timestampOffsetMs,
           optional: false,
         }),
@@ -1668,6 +1780,7 @@ export class DemonstrationRecorder {
       this.#session.actions.push(
         RecordedActionSchema.parse({
           id: createId("action"),
+          sequence: this.#nextSequence++,
           pageContextId,
           action: "dialog",
           name: `Main page — ${response} ${dialog.type()} dialog`,
@@ -1679,6 +1792,15 @@ export class DemonstrationRecorder {
               description: `${dialog.type()} dialog handled locally.`,
             },
           ],
+          ...([...this.#session.actions]
+            .reverse()
+            .find((action) => action.target)
+            ? {
+                causedByActionId: [...this.#session.actions]
+                  .reverse()
+                  .find((action) => action.target)!.id,
+              }
+            : {}),
           timestampOffsetMs: Math.max(0, Date.now() - this.#startedAtMs),
           optional: false,
         }),

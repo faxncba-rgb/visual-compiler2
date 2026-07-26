@@ -159,6 +159,7 @@ export function session(): DemonstrationSession {
         required: true,
       },
     ],
+    outcomeVerification: "PARTIALLY_VERIFIED",
     outcomeCandidates: [],
     authenticationExcluded: true,
   };

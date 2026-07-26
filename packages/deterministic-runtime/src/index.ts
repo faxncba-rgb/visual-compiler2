@@ -272,9 +272,18 @@ export class DeterministicRuntime {
           "Runtime blocked an attempted OpenAI request; execution failed closed.",
         );
       }
-      telemetry.state = "Passed";
+      if (this.#workflow.expectedOutcome.verification === "VERIFIED") {
+        telemetry.state = "Passed";
+        telemetry.redactedLog.push(
+          "Application-level positive outcome verified.",
+        );
+      } else {
+        telemetry.state = "CompletedUnverified";
+        telemetry.redactedLog.push(
+          "Actions completed without verified positive application evidence.",
+        );
+      }
       telemetry.redactedLog.push(
-        "Application-level positive outcome verified.",
         "Runtime LLM calls: 0",
         "Runtime OpenAI requests: 0",
       );

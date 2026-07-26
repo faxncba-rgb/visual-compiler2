@@ -267,32 +267,20 @@ function compileOutcome(
   session: DemonstrationSession,
   steps: CompiledStep[],
 ): ApplicationOutcome {
-  let candidates = session.outcomeCandidates;
-  if (candidates.length === 0) {
-    const legacySuccess = session.actions
-      .flatMap((action) => action.observedEffects)
-      .find((effect) => effect.type === "success-visible");
-    if (legacySuccess?.pageContextId) {
-      candidates = [
-        {
-          id: createId("outcome"),
-          type: "success-marker",
-          label: "Legacy structural success marker",
-          pageContextId: legacySuccess.pageContextId,
-          target: '[data-vc-outcome="success"]',
-          observed: true,
-          confidence: 0.8,
-          recommended: false,
-          selected: true,
-          required: true,
-          rejectionReasons: [],
-        },
-      ];
-    }
-  }
-  const selected = candidates.filter(
-    (candidate) => candidate.selected && candidate.observed,
-  );
+  const candidates = session.outcomeCandidates;
+  const observed = candidates
+    .filter((candidate) => candidate.observed)
+    .sort((left, right) => right.confidence - left.confidence);
+  const selected = observed.slice(0, 1);
+  const outcomeVerification =
+    session.outcomeVerification !== "UNVERIFIED"
+      ? session.outcomeVerification
+      : observed.length === 0
+        ? "UNVERIFIED"
+        : observed[0]!.confidence >= 0.85 &&
+            session.effectReconciliation?.status === "stable"
+          ? "VERIFIED"
+          : "PARTIALLY_VERIFIED";
   const evidence: ApplicationOutcomeValidationEvidence = {
     ...(session.applicationStateBefore?.historyCount !== undefined
       ? {
@@ -321,10 +309,9 @@ function compileOutcome(
         reasons: candidate.rejectionReasons,
       })),
   };
-  if (selected.length === 0)
-    throw new ApplicationOutcomeValidationError(evidence);
   const positiveEvidence: ApplicationOutcome["positiveEvidence"] = [];
   for (const candidate of selected) {
+    const required = outcomeVerification === "VERIFIED";
     if (
       candidate.type === "relative-count-increase" ||
       candidate.type === "new-scoped-item"
@@ -334,7 +321,7 @@ function compileOutcome(
         pageContextId: candidate.pageContextId,
         target: candidate.target,
         expected: candidate.minimumIncrease ?? 1,
-        required: candidate.required,
+        required,
       });
       continue;
     }
@@ -347,7 +334,7 @@ function compileOutcome(
         ...(candidate.variableRef
           ? { variableRef: candidate.variableRef }
           : {}),
-        required: candidate.required,
+        required,
       });
       continue;
     }
@@ -370,7 +357,7 @@ function compileOutcome(
         target: candidate.target,
         expected: true,
         ...(fillStep ? { sourceStepId: fillStep.id } : {}),
-        required: candidate.required,
+        required,
       });
       continue;
     }
@@ -384,7 +371,7 @@ function compileOutcome(
           pageContextId: popupClose.pageContextId,
           target: popupClose.pageContextId,
           expected: true,
-          required: candidate.required,
+          required,
         });
       }
       continue;
@@ -395,7 +382,7 @@ function compileOutcome(
         pageContextId: candidate.pageContextId,
         target: candidate.target,
         expected: true,
-        required: candidate.required,
+        required,
       });
       continue;
     }
@@ -405,7 +392,7 @@ function compileOutcome(
         pageContextId: candidate.pageContextId,
         target: candidate.target,
         expected: true,
-        required: candidate.required,
+        required,
       });
       continue;
     }
@@ -414,19 +401,16 @@ function compileOutcome(
       pageContextId: candidate.pageContextId,
       target: candidate.target,
       expected: true,
-      required: candidate.required,
+      required,
     });
   }
-  if (positiveEvidence.length === 0)
-    throw new ApplicationOutcomeValidationError(evidence);
   return {
     positiveEvidence,
     negativeEvidence: [
       {
         type: "error-marker",
         target: '[data-vc-outcome="error"]',
-        description:
-          "Known synthetic application error marker must remain absent.",
+        description: "Known application error marker must remain absent.",
       },
       {
         type: "closed-main-page",
@@ -439,7 +423,9 @@ function compileOutcome(
         description: "No unmodeled popup may remain open.",
       },
     ],
-    requireAllPositive: true,
+    requireAllPositive: outcomeVerification === "VERIFIED",
+    verification:
+      positiveEvidence.length === 0 ? "UNVERIFIED" : outcomeVerification,
   };
 }
 
@@ -739,6 +725,24 @@ export async function compileDemonstration({
   try {
     session = DemonstrationSessionSchema.parse(rawSession);
     assertNoLocalValuesInSession(session, localValues);
+    const hasExecutableAction = session.actions.some(
+      (action) =>
+        Boolean(action.target) &&
+        [
+          "click",
+          "double-click",
+          "fill",
+          "select",
+          "check",
+          "uncheck",
+          "keyboard",
+          "submit",
+        ].includes(action.action),
+    );
+    if (!hasExecutableAction)
+      throw new Error(
+        "Compilation requires at least one executable demonstrated action.",
+      );
   } catch (error) {
     throw compilationStageError("demonstration-validation", error);
   }

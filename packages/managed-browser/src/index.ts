@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
   chromium,
@@ -54,21 +54,21 @@ export class ManagedBrowser {
 
   async open(initialUrl: string) {
     if (this.#context) return this.#mainPage;
-    await mkdir(path.resolve(this.options.profileDirectory), {
+    const profileDirectory = path.resolve(this.options.profileDirectory);
+    await mkdir(profileDirectory, {
       recursive: true,
+      mode: 0o700,
     });
-    const context = await chromium.launchPersistentContext(
-      path.resolve(this.options.profileDirectory),
-      {
-        headless: this.options.headless ?? false,
-        ...(this.options.slowMo !== undefined
-          ? { slowMo: this.options.slowMo }
-          : {}),
-        serviceWorkers: "block",
-        viewport: { width: 1380, height: 900 },
-        args: ["--disable-background-networking"],
-      },
-    );
+    await chmod(profileDirectory, 0o700).catch(() => undefined);
+    const context = await chromium.launchPersistentContext(profileDirectory, {
+      headless: this.options.headless ?? false,
+      ...(this.options.slowMo !== undefined
+        ? { slowMo: this.options.slowMo }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { width: 1380, height: 900 },
+      args: ["--disable-background-networking"],
+    });
     this.#context = context;
     await context.route("**/*", (route) => this.#guardRoute(route));
     await context.routeWebSocket(
@@ -120,7 +120,9 @@ export class ManagedBrowser {
     const pages =
       this.#context?.pages().filter((page) => !page.isClosed()) ?? [];
     return {
-      open: Boolean(this.#context),
+      open: Boolean(
+        this.#context && this.#mainPage && !this.#mainPage.isClosed(),
+      ),
       headless: this.options.headless ?? false,
       authenticationMode: "manual",
       ...(this.#mainPage && !this.#mainPage.isClosed()

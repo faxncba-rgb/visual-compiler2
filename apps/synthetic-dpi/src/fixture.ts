@@ -287,3 +287,41 @@ export function renderDialogWorkflow() {
     }, 50));
   </script></body></html>`;
 }
+
+export function renderInteractionControls() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Synthetic interaction controls</title>
+  <style>${baseStyles}.menu[hidden]{display:none}.menu{margin-top:8px;padding:8px;border:1px solid #aeb9b2;border-radius:8px}.menu button{display:block;width:100%;padding:8px;text-align:left}</style>
+  </head><body><div class="lab">LAB MODE — SYNTHETIC TEST RECORDS ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Interaction controls</h1></div>
+  <form name="interaction-controls" class="record-grid">
+  <section aria-labelledby="text-heading"><h2 id="text-heading">Keyboard</h2>
+  <label for="note">Synthetic note</label><input id="note" name="note" type="text">
+  </section>
+  <section aria-labelledby="choice-heading"><h2 id="choice-heading">Choices</h2>
+  <label><input name="tracking" type="checkbox"> Enable tracking</label>
+  <label for="priority">Priority</label>
+  <select id="priority" name="priority"><option value="">Choose</option><option value="high">High</option></select>
+  <button type="button" aria-expanded="false" data-menu-trigger><span>Choose category</span></button>
+  <div class="menu" role="menu" hidden>
+    <button type="button" role="menuitem" data-category="review"><span>Review</span></button>
+  </div>
+  <p class="status" role="status" data-vc-outcome="pending">No category chosen.</p>
+  </section></form></article></main>
+  <script>
+    const trigger = document.querySelector('[data-menu-trigger]');
+    const menu = document.querySelector('[role=menu]');
+    trigger.addEventListener('click', () => {
+      const opening = menu.hidden;
+      menu.hidden = !opening;
+      trigger.setAttribute('aria-expanded', String(opening));
+    });
+    document.querySelector('[role=menuitem]').addEventListener('click', event => {
+      const status = document.querySelector('[data-vc-outcome]');
+      status.dataset.vcOutcome = 'success';
+      status.className = 'status success';
+      status.textContent = 'Category ' + event.currentTarget.dataset.category + ' selected.';
+      menu.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+    });
+  </script></body></html>`;
+}

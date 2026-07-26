@@ -7,6 +7,7 @@ test-results/
 .env
 .env.*
 !.env.example
+.local/
 browser-profiles/*
 !browser-profiles/.gitkeep
 local-data/*

@@ -4,6 +4,7 @@ import {
   renderDialogWorkflow,
   renderEditorFrame,
   renderFixture,
+  renderInteractionControls,
   renderPopupAction,
   renderPopupWorkflow,
   renderValidationPopup,
@@ -39,6 +40,8 @@ export function createSyntheticDpiServer() {
       return html(response, renderCrossOriginFrame());
     if (url.pathname === "/fixture/dialogs")
       return html(response, renderDialogWorkflow());
+    if (url.pathname === "/fixture/controls")
+      return html(response, renderInteractionControls());
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("Synthetic fixture not found");
   });

@@ -1,10 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 let state;
-let toastTimer;
-let previewTimer;
 let requestInFlight = false;
+let toastTimer;
 let lastRunMode = "local";
 
 class ApiError extends Error {
@@ -16,14 +14,14 @@ class ApiError extends Error {
   }
 }
 
-function toast(message, error = false) {
+function toast(message) {
   const element = $("#toast");
   element.textContent = message;
-  element.className = error ? "visible error" : "visible";
+  element.className = "visible";
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     element.className = "";
-  }, 3600);
+  }, 2800);
 }
 
 async function api(path, options = {}) {
@@ -53,45 +51,83 @@ function textElement(tag, className, value) {
   return element;
 }
 
+function formatDiagnostic(diagnostic) {
+  const lines = [
+    `Timestamp: ${diagnostic.occurredAt}`,
+    `HTTP status: ${diagnostic.httpStatus ?? "n/a"}`,
+    `Stage: ${diagnostic.stage}`,
+    `Workflow state: ${diagnostic.workflowState}`,
+    `Message: ${diagnostic.serverMessage}`,
+    `Runtime LLM calls: ${diagnostic.llmCalls ?? 0}`,
+    `Runtime OpenAI requests: ${diagnostic.openAIRequests ?? 0}`,
+  ];
+  if (diagnostic.stepId) lines.push(`Step ID: ${diagnostic.stepId}`);
+  if (diagnostic.actionType)
+    lines.push(`Action type: ${diagnostic.actionType}`);
+  if (diagnostic.targetSummary)
+    lines.push(`Target: ${diagnostic.targetSummary}`);
+  if (diagnostic.selectedLocator)
+    lines.push(`Selected locator: ${diagnostic.selectedLocator}`);
+  if (diagnostic.observedReactionSummary)
+    lines.push(`Observed reactions: ${diagnostic.observedReactionSummary}`);
+  if (diagnostic.structuralEvidence)
+    lines.push(
+      `Structural evidence: ${JSON.stringify(diagnostic.structuralEvidence)}`,
+    );
+  if (diagnostic.applicationOutcomeEvidence)
+    lines.push(
+      `Outcome evidence: ${JSON.stringify(diagnostic.applicationOutcomeEvidence)}`,
+    );
+  return lines.join("\n");
+}
+
+function renderDiagnostic(diagnostic) {
+  const panel = $("#compilationDiagnostics");
+  panel.hidden = !diagnostic;
+  if (!diagnostic) return;
+  $("#diagnosticHttpStatus").textContent =
+    diagnostic.httpStatus === undefined ? "—" : String(diagnostic.httpStatus);
+  $("#diagnosticCompilerStage").textContent = diagnostic.stage;
+  $("#diagnosticWorkflowState").textContent = diagnostic.workflowState;
+  $("#diagnosticServerMessage").textContent = diagnostic.serverMessage;
+  $("#diagnosticStructuralEvidence").textContent = pretty(
+    {
+      stepId: diagnostic.stepId,
+      actionType: diagnostic.actionType,
+      targetSummary: diagnostic.targetSummary,
+      selectedLocator: diagnostic.selectedLocator,
+      observedReactionSummary: diagnostic.observedReactionSummary,
+      structuralEvidence: diagnostic.structuralEvidence,
+      applicationOutcomeEvidence: diagnostic.applicationOutcomeEvidence,
+      llmCalls: diagnostic.llmCalls,
+      openAIRequests: diagnostic.openAIRequests,
+    },
+    "No additional structural evidence.",
+  );
+  $("#retryDiagnostic").textContent =
+    diagnostic.stage === "browser-open"
+      ? "Retry opening browser"
+      : diagnostic.stage === "runtime-execution"
+        ? "Run again"
+        : "Retry compile";
+}
+
 function renderGraph(nodes = []) {
   const list = $("#pageGraph");
   list.replaceChildren();
   $("#pageCount").textContent =
     `${nodes.length} context${nodes.length === 1 ? "" : "s"}`;
   if (!nodes.length) {
-    list.append(
-      textElement(
-        "li",
-        "empty",
-        "Open the managed browser to discover contexts.",
-      ),
-    );
+    list.append(textElement("li", "empty", "No browser contexts yet."));
     return;
   }
   for (const node of nodes) {
     const item = document.createElement("li");
-    if (node.parentId) item.style.marginLeft = "16px";
     item.append(
-      textElement(
-        "strong",
-        "",
-        `${node.role.toUpperCase()} · ${node.status}${node.sameOriginInspectable ? "" : " · opaque"}`,
-      ),
+      textElement("strong", "", `${node.role.toUpperCase()} · ${node.status}`),
       textElement("code", "", `${node.origin}${node.pathname}`),
     );
     list.append(item);
-  }
-}
-
-async function patchAction(actionId, patch) {
-  try {
-    state = await api(`/api/teaching/actions/${encodeURIComponent(actionId)}`, {
-      method: "PATCH",
-      body: patch,
-    });
-    render();
-  } catch (error) {
-    toast(error.message, true);
   }
 }
 
@@ -105,389 +141,268 @@ function renderTimeline(actions = []) {
         "empty",
         state?.state === "RECORDING"
           ? "Teaching is active. Perform the workflow in the managed browser."
-          : "Authenticate, navigate to the synthetic record, then start teaching.",
+          : "No demonstrated actions yet.",
       ),
     );
     return;
   }
-  actions.forEach((action, index) => {
+  for (const [index, action] of actions.entries()) {
     const item = document.createElement("li");
-    const number = textElement("span", "step-number", String(index + 1));
     const copy = document.createElement("div");
     copy.className = "step-copy";
+    const causal = action.causedByActionId ? " · causal reaction" : "";
+    const effects = action.observedEffects?.length
+      ? ` · ${action.observedEffects.length} reaction${action.observedEffects.length === 1 ? "" : "s"}`
+      : "";
     copy.append(
-      textElement(
-        "strong",
-        "",
-        `${action.optional ? "Optional · " : ""}${action.name}`,
-      ),
+      textElement("strong", "", action.name),
       textElement(
         "span",
         "",
-        `${action.action}${action.valueRef ? ` · ${action.valueRef}` : ""}`,
+        `${action.action}${action.key ? ` · ${action.key}` : ""} · ${action.timestampOffsetMs} ms${effects}${causal}`,
       ),
     );
-    const tools = document.createElement("div");
-    tools.className = "step-tools";
-    const rename = textElement("button", "", "Rename");
-    rename.type = "button";
-    rename.addEventListener("click", () => {
-      const name = prompt("Step name", action.name);
-      if (name?.trim()) void patchAction(action.id, { name: name.trim() });
-    });
-    const optional = textElement(
-      "button",
-      "",
-      action.optional ? "Required" : "Optional",
+    item.append(
+      textElement("span", "step-number", String(action.sequence ?? index + 1)),
+      copy,
     );
-    optional.type = "button";
-    optional.addEventListener(
-      "click",
-      () => void patchAction(action.id, { optional: !action.optional }),
-    );
-    const remove = textElement("button", "", "Delete");
-    remove.type = "button";
-    remove.addEventListener(
-      "click",
-      () => void patchAction(action.id, { deleted: true }),
-    );
-    tools.append(rename, optional, remove);
-    item.append(number, copy, tools);
     list.append(item);
-  });
+  }
 }
 
 function renderVariables(variables = [], values = {}) {
   const container = $("#variables");
   container.replaceChildren();
   if (!variables.length) {
-    container.append(
-      textElement("p", "empty", "Typed demonstration values will appear here."),
-    );
+    container.append(textElement("p", "empty", "No local variables yet."));
     return;
   }
   for (const variable of variables) {
     const row = document.createElement("div");
     row.className = "variable-row";
-    row.append(textElement("code", "", `{{${variable.name}}}`));
+    const name = textElement("code", "", `{{${variable.name}}}`);
     const input = document.createElement("input");
-    input.type = "text";
-    input.value = values[variable.name] ?? "";
+    input.value = values?.[variable.name] ?? "";
     input.setAttribute("aria-label", `${variable.name} local value`);
+    let inputUpdate;
+    input.addEventListener("input", () => {
+      clearTimeout(inputUpdate);
+      inputUpdate = setTimeout(() => {
+        void mutate(
+          `/api/variables/${encodeURIComponent(variable.name)}`,
+          {
+            privacy: variable.privacy,
+            value: input.value,
+          },
+          undefined,
+          "PATCH",
+        );
+      }, 180);
+    });
     const privacy = document.createElement("select");
     privacy.setAttribute("aria-label", `${variable.name} privacy`);
-    [
-      ["local-variable", "Convert to local variable"],
-      ["local-literal", "Keep as local literal"],
-      ["ai-instruction", "Include in AI intentionally"],
-    ].forEach(([value, label]) => {
+    for (const [value, label] of [
+      ["local-variable", "Local variable"],
+      ["local-literal", "Local literal"],
+      ["ai-instruction", "Include intentionally in AI"],
+    ]) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = label;
       option.selected = variable.privacy === value;
       privacy.append(option);
+    }
+    privacy.addEventListener("change", () => {
+      void mutate(
+        `/api/variables/${encodeURIComponent(variable.name)}`,
+        {
+          privacy: privacy.value,
+          value: input.value,
+        },
+        undefined,
+        "PATCH",
+      );
     });
-    const save = async () => {
-      try {
-        state = await api(
-          `/api/variables/${encodeURIComponent(variable.name)}`,
-          {
-            method: "PATCH",
-            body: { privacy: privacy.value, value: input.value },
-          },
-        );
-        toast(`${variable.name} remains in the selected privacy boundary.`);
-        render();
-      } catch (error) {
-        toast(error.message, true);
-      }
-    };
-    privacy.addEventListener("change", save);
-    input.addEventListener("change", save);
-    row.append(input, privacy);
+    row.append(name, input, privacy);
     container.append(row);
   }
 }
 
-async function patchOutcome(candidateId, patch) {
-  try {
-    state = await api(
-      `/api/teaching/outcomes/${encodeURIComponent(candidateId)}`,
-      {
-        method: "PATCH",
-        body: patch,
-      },
-    );
-    render();
-  } catch (error) {
-    toast(error.message, true);
-  }
-}
-
-function renderOutcomeCandidates(session) {
-  const candidates = session?.outcomeCandidates ?? [];
+function renderOutcomes(session) {
   const container = $("#outcomeCandidates");
   container.replaceChildren();
-  const reconciliation = session?.effectReconciliation;
-  $("#outcomeEvidenceStatus").textContent = !session
-    ? "Complete and stop teaching to reconcile the stable after-state."
-    : reconciliation?.status === "stable"
-      ? `Stable after-state reconciled · ${reconciliation.observedForMs} ms observation · ${reconciliation.mutationCount} late mutations.`
-      : reconciliation?.status === "timed-out"
-        ? "Final reconciliation reached its bounded timeout; inspect the rejected evidence."
-        : "Stored demonstration lacks scoped before/after outcome data. Capture a compatible stable state or re-teach.";
+  const candidates = session?.outcomeCandidates ?? [];
   if (!candidates.length) {
     container.append(
-      textElement(
-        "p",
-        "empty",
-        "No positive application evidence is available for compilation.",
-      ),
+      textElement("p", "empty", "No positive outcome was derived."),
     );
     return;
   }
   for (const candidate of candidates) {
-    const row = document.createElement("div");
-    row.className = "outcome-candidate";
-    const selected = document.createElement("input");
-    selected.type = "checkbox";
-    selected.checked = candidate.selected;
-    selected.disabled = !candidate.observed;
-    selected.setAttribute("aria-label", `Select ${candidate.label}`);
-    selected.addEventListener(
-      "change",
-      () => void patchOutcome(candidate.id, { selected: selected.checked }),
-    );
-    const required = document.createElement("input");
-    required.type = "checkbox";
-    required.checked = candidate.required;
-    required.disabled = !candidate.selected || !candidate.observed;
-    required.setAttribute("aria-label", `Require ${candidate.label}`);
-    required.addEventListener(
-      "change",
-      () => void patchOutcome(candidate.id, { required: required.checked }),
-    );
-    const copy = document.createElement("div");
-    copy.append(
-      textElement(
-        "strong",
-        "",
-        `${candidate.label}${candidate.recommended ? " — recommended" : ""}`,
-      ),
+    const item = document.createElement("div");
+    item.className = "outcome-candidate";
+    item.append(
+      textElement("strong", "", candidate.label),
       textElement(
         "span",
-        candidate.observed ? "candidate-observed" : "candidate-rejected",
-        candidate.observed
-          ? `${candidate.type} · confidence ${Math.round(candidate.confidence * 100)}%`
-          : candidate.rejectionReasons.join(" "),
+        candidate.observed ? "observed" : "rejected",
+        `${candidate.observed ? "Observed" : "Not observed"} · ${Math.round(candidate.confidence * 100)}%`,
       ),
     );
-    const selectedLabel = document.createElement("label");
-    selectedLabel.append(selected, document.createTextNode(" Selected"));
-    const requiredLabel = document.createElement("label");
-    requiredLabel.append(required, document.createTextNode(" Required"));
-    const controls = document.createElement("div");
-    controls.className = "outcome-controls";
-    controls.append(selectedLabel, requiredLabel);
-    row.append(copy, controls);
-    container.append(row);
+    container.append(item);
   }
 }
 
 function renderLocators(workflow) {
-  const container = $("#locatorCards");
+  const container = $("#locatorCandidates");
   container.replaceChildren();
-  const steps = workflow?.steps ?? [];
-  const candidates = steps.flatMap((step) =>
-    step.locatorCandidates.map((candidate) => ({ step, candidate })),
+  if (!workflow) {
+    container.textContent = "No workflow compiled.";
+    return;
+  }
+  for (const step of workflow.steps) {
+    const selected = step.locatorCandidates.find(
+      (candidate) => candidate.id === step.selectedLocatorId,
+    );
+    const item = document.createElement("div");
+    item.className = "locator-row";
+    item.append(
+      textElement("strong", "", `${step.action} · ${step.name}`),
+      textElement(
+        "code",
+        "",
+        selected?.selectorPreview ?? "No locator required",
+      ),
+    );
+    container.append(item);
+  }
+}
+
+function executableActionCount(session) {
+  return (
+    session?.actions?.filter(
+      (action) =>
+        action.target &&
+        [
+          "click",
+          "double-click",
+          "fill",
+          "select",
+          "check",
+          "uncheck",
+          "keyboard",
+          "submit",
+        ].includes(action.action),
+    ).length ?? 0
   );
-  if (!candidates.length) {
-    container.append(
-      textElement("p", "empty", "Locator candidates appear after compilation."),
-    );
-    return;
-  }
-  for (const { step, candidate } of candidates) {
-    const card = document.createElement("article");
-    card.className =
-      "locator-card" +
-      (candidate.id === step.selectedLocatorId ? " selected" : "");
-    card.append(
-      textElement(
-        "strong",
-        "",
-        `${candidate.id === step.selectedLocatorId ? "Selected · " : ""}${candidate.strategy}`,
-      ),
-      textElement("code", "", candidate.selectorPreview),
-      textElement(
-        "span",
-        "",
-        `${step.name} · matches ${candidate.matchCount} · visible ${candidate.visibleCount} · enabled ${candidate.enabledCount} · type-compatible ${candidate.typeCompatibleCount} · confidence ${Math.round(candidate.confidence * 100)}%`,
-      ),
-    );
-    container.append(card);
-  }
-}
-
-function formatCompilationDiagnostic(diagnostic) {
-  const lines = [
-    `HTTP status: ${diagnostic.httpStatus}`,
-    `Compiler stage: ${diagnostic.compilerStage}`,
-    `Occurred at: ${diagnostic.occurredAt}`,
-    "Redacted server message:",
-    diagnostic.serverMessage,
-  ];
-  if (diagnostic.structuralEvidence) {
-    lines.push(
-      "Redacted structural evidence:",
-      JSON.stringify(diagnostic.structuralEvidence, null, 2),
-    );
-  }
-  if (diagnostic.applicationOutcomeEvidence) {
-    lines.push(
-      "Redacted application outcome evidence:",
-      JSON.stringify(diagnostic.applicationOutcomeEvidence, null, 2),
-    );
-  }
-  return lines.join("\n");
-}
-
-function renderCompilationDiagnostics(diagnostic) {
-  const panel = $("#compilationDiagnostics");
-  panel.hidden = !diagnostic;
-  if (!diagnostic) {
-    $("#diagnosticHttpStatus").textContent = "—";
-    $("#diagnosticCompilerStage").textContent = "—";
-    $("#diagnosticServerMessage").textContent = "";
-    $("#diagnosticStructuralEvidence").textContent = "";
-    return;
-  }
-  $("#diagnosticHttpStatus").textContent = String(diagnostic.httpStatus);
-  $("#diagnosticCompilerStage").textContent = diagnostic.compilerStage;
-  $("#diagnosticServerMessage").textContent = diagnostic.serverMessage;
-  const evidence = {
-    ...(diagnostic.structuralEvidence
-      ? { locator: diagnostic.structuralEvidence }
-      : {}),
-    ...(diagnostic.applicationOutcomeEvidence
-      ? { applicationOutcome: diagnostic.applicationOutcomeEvidence }
-      : {}),
-  };
-  $("#diagnosticStructuralEvidence").textContent = Object.keys(evidence).length
-    ? JSON.stringify(evidence, null, 2)
-    : "No redacted structural evidence was produced for this failure.";
-}
-
-function renderStudioEventLog(events = []) {
-  $("#studioEventLog").textContent = events.length
-    ? events.map(formatCompilationDiagnostic).join("\n\n")
-    : "No persistent Studio events yet.";
 }
 
 function renderButtons() {
   const current = state?.state ?? "IDLE";
-  const hasWorkflow = Boolean(state?.workflow);
-  const hasSelectedPositiveEvidence = Boolean(
-    state?.session?.outcomeCandidates?.some(
-      (candidate) => candidate.observed && candidate.selected,
-    ) ||
-      state?.session?.actions?.some((action) =>
-        action.observedEffects?.some(
-          (effect) => effect.type === "success-visible",
-        ),
-      ),
-  );
-  $("#openBrowser").disabled = current !== "IDLE";
-  $("#authComplete").disabled = current !== "AUTHENTICATING";
-  $("#startTeaching").disabled = current !== "READY_TO_TEACH";
-  $("#stopTeaching").disabled = current !== "RECORDING";
+  const active = ["RECORDING", "COMPILING", "RUNNING"].includes(current);
+  const runnable = [
+    "READY_TO_RUN",
+    "PASSED",
+    "COMPLETED_UNVERIFIED",
+    "FAILED",
+    "STOPPED",
+  ].includes(current);
+  const teachable = [
+    "READY_TO_TEACH",
+    "DEMONSTRATION_REVIEW",
+    "READY_TO_RUN",
+    "PASSED",
+    "COMPLETED_UNVERIFIED",
+    "FAILED",
+    "STOPPED",
+  ].includes(current);
+  $("#reopenBrowser").disabled = active || requestInFlight;
+  $("#returnHome").disabled =
+    !state?.browser?.open || active || requestInFlight;
+  $("#startTeaching").disabled =
+    !teachable || !state?.browser?.open || requestInFlight;
+  $("#stopTeaching").disabled = current !== "RECORDING" || requestInFlight;
+  $("#clearDemonstration").disabled =
+    !state?.session || active || requestInFlight;
   $("#restoreLastDemonstration").disabled =
     current !== "READY_TO_TEACH" ||
     !state?.lastDemonstration?.available ||
     !state?.lastDemonstration?.structurallyCompatible ||
     requestInFlight;
-  $("#rerecord").disabled = ![
-    "DEMONSTRATION_REVIEW",
-    "READY_TO_RUN",
-    "PASSED",
-    "FAILED",
-    "STOPPED",
-  ].includes(current);
   $("#compile").disabled =
     current !== "DEMONSTRATION_REVIEW" ||
-    requestInFlight ||
-    !hasSelectedPositiveEvidence;
-  $("#compile").textContent = state?.compilationDiagnostic
-    ? "Retry compile"
-    : "Compile";
-  $("#resetSyntheticFixture").disabled =
-    !state?.browser?.open ||
-    requestInFlight ||
-    ["RECORDING", "COMPILING", "RUNNING"].includes(current);
-  $("#recaptureOutcome").disabled =
-    current !== "DEMONSTRATION_REVIEW" || requestInFlight;
-  $("#useCurrentOutcome").disabled =
-    current !== "DEMONSTRATION_REVIEW" || requestInFlight;
-  $("#animatedRun").disabled =
-    !hasWorkflow ||
-    !["READY_TO_RUN", "PASSED", "FAILED", "STOPPED"].includes(current);
-  $("#localRun").disabled =
-    !hasWorkflow ||
-    !["READY_TO_RUN", "PASSED", "FAILED", "STOPPED"].includes(current);
+    executableActionCount(state?.session) === 0 ||
+    requestInFlight;
+  $("#compile").textContent = "Compile";
+  $("#localRun").disabled = !state?.workflow || !runnable || requestInFlight;
+  $("#animatedRun").disabled = !state?.workflow || !runnable || requestInFlight;
   $("#runAgain").disabled =
-    !hasWorkflow || !["PASSED", "FAILED", "STOPPED"].includes(current);
-  $("#stopAll").disabled = !["RECORDING", "RUNNING"].includes(current);
-  $("#reset").disabled = current === "RUNNING";
+    !state?.workflow ||
+    !["PASSED", "COMPLETED_UNVERIFIED", "FAILED", "STOPPED"].includes(
+      current,
+    ) ||
+    requestInFlight;
+  $("#stopAll").disabled = current !== "RUNNING";
+  $("#reset").disabled = current === "RUNNING" || requestInFlight;
 }
 
 function render() {
   if (!state) return;
+  const diagnostic = state.diagnostic ?? state.compilationDiagnostic;
   $("#studioState").textContent = state.state;
   $("#browserStatus").textContent = state.browser.open ? "OPEN" : "CLOSED";
   $("#recorderStatus").textContent = state.recorder.active
     ? "RECORDING"
     : "OFF";
   $("#compilerStatus").textContent = state.workflow
-    ? state.workflow.compileMode
+    ? state.workflow.compileMode === "direct-demonstration"
+      ? "LOCAL"
+      : "GENERALIZED"
     : state.state === "COMPILING"
       ? "COMPILING"
       : "WAITING";
-  $("#compileCalls").textContent = state.metrics.compileTimeModelCalls;
+  $("#runtimeStatus").textContent = state.telemetry?.state ?? "READY";
   $("#runtimeLlmCalls").textContent = state.metrics.runtimeLlmCalls;
   $("#runtimeOpenAiRequests").textContent = state.metrics.runtimeOpenAIRequests;
   $("#canonicalPage").textContent = state.browser.currentUrl ?? "—";
+  $("#browserGuidance").textContent = state.browser.open
+    ? "Browser ready. Authenticate and navigate manually; recording is still off."
+    : "The dedicated browser is closed. Reopen it to continue.";
+
   const recording = state.state === "RECORDING";
   $("#recordingIndicator").textContent = recording
     ? "● Teaching now"
     : "Recorder idle";
   $("#recordingIndicator").className =
     "recording-indicator" + (recording ? " active" : "");
-  const lastDemonstration = state.lastDemonstration;
-  const missingOutcomeSuffix =
-    lastDemonstration?.missingOutcomeFields?.length > 0
-      ? ` Missing outcome fields: ${lastDemonstration.missingOutcomeFields.join(", ")}.`
-      : "";
-  $("#lastDemonstrationStatus").textContent =
-    (!lastDemonstration?.available
-      ? "No completed local demonstration is available."
-      : lastDemonstration.structurallyCompatible
-        ? `Ready to restore · ${lastDemonstration.profileId} · structure compatible.`
-        : state.browser.open
-          ? `Stored profile ${lastDemonstration.profileId} is structurally incompatible with the current page.`
-          : `Stored locally for ${lastDemonstration.profileId}. Open and authenticate that profile to restore it.`) +
-    missingOutcomeSuffix;
+
+  const last = state.lastDemonstration;
+  $("#lastDemonstrationStatus").textContent = !last?.available
+    ? "No completed local demonstration is available."
+    : last.structurallyCompatible
+      ? "A compatible local demonstration can be restored."
+      : "The stored demonstration does not match the current page structure.";
+
+  const executable = executableActionCount(state.session);
+  const verification = state.session?.outcomeVerification ?? "UNVERIFIED";
+  $("#demonstrationSummary").textContent = state.session
+    ? `${executable} executable action${executable === 1 ? "" : "s"} · outcome ${verification}`
+    : "Stop teaching to prepare a demonstration.";
+  $("#compileMode").textContent = $("#generalizationInstruction").value.trim()
+    ? "Mocked generalization — no live AI call"
+    : "Direct local compilation — no AI call";
   $("#runtimeState").textContent = state.telemetry
     ? `${state.telemetry.state} · ${state.telemetry.mode} · ${state.telemetry.steps.length} steps`
     : state.workflow
-      ? "Artifact ready · choose either run mode"
-      : "Ready when compiled";
-  $("#compileMode").textContent = $("#generalizationInstruction").value.trim()
-    ? "mocked AI generalization"
-    : "direct-demonstration compiler";
-  renderGraph(state.session?.pageGraph?.nodes ?? []);
+      ? `Artifact ready · outcome ${state.workflow.expectedOutcome.verification}`
+      : "Compile a demonstration to run it.";
+
   renderTimeline(state.session?.actions ?? []);
+  renderGraph(state.session?.pageGraph?.nodes ?? []);
   renderVariables(state.session?.variables ?? [], state.localRuntimeVariables);
-  renderOutcomeCandidates(state.session);
+  renderOutcomes(state.session);
+  renderLocators(state.workflow);
+  renderDiagnostic(diagnostic);
   $("#demonstrationJson").textContent = pretty(
     state.session,
     "No demonstration recorded.",
@@ -499,36 +414,48 @@ function render() {
   $("#generatedCode").textContent =
     state.workflow?.compilationMetadata?.generatedPlaywright ??
     "No deterministic outline generated.";
-  $("#runtimeLog").textContent = pretty(state.telemetry, "No local run yet.");
   $("#payloadPreview").textContent = pretty(
     state.aiPayloadPreview,
     "No payload prepared.",
   );
-  renderCompilationDiagnostics(state.compilationDiagnostic);
-  renderStudioEventLog(state.studioEventLog);
-  renderLocators(state.workflow);
+  $("#runtimeLog").textContent = pretty(state.telemetry, "No local run yet.");
+  $("#studioEventLog").textContent = state.studioEventLog?.length
+    ? state.studioEventLog.map(formatDiagnostic).join("\n\n")
+    : "No persistent Studio events yet.";
   renderButtons();
+}
+
+function adoptDiagnostic(error) {
+  if (!(error instanceof ApiError) || !error.diagnostic) return false;
+  if (state) {
+    state.diagnostic = error.diagnostic;
+    state.compilationDiagnostic = error.diagnostic;
+  }
+  renderDiagnostic(error.diagnostic);
+  renderButtons();
+  $("#compilationDiagnostics").scrollIntoView({ block: "nearest" });
+  return true;
 }
 
 async function refresh() {
   try {
     state = await api("/api/state", { method: "GET" });
     render();
-  } catch (error) {
-    toast(error.message, true);
+  } catch {
+    // A failed refresh must not replace or hide the last persistent diagnostic.
   }
 }
 
-async function mutate(path, body, successMessage) {
+async function mutate(path, body, successMessage, method = "POST") {
   requestInFlight = true;
   renderButtons();
   try {
-    state = await api(path, { body });
+    state = await api(path, { body, method });
     render();
     if (successMessage) toast(successMessage);
     return state;
   } catch (error) {
-    toast(error.message, true);
+    adoptDiagnostic(error);
     await refresh();
   } finally {
     requestInFlight = false;
@@ -536,154 +463,41 @@ async function mutate(path, body, successMessage) {
   }
 }
 
-$("#openBrowser").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/browser/open",
-      { targetUrl: $("#targetUrl").value },
-      "Managed browser opened. Authentication remains manual and unrecorded.",
-    ),
-);
-$("#authComplete").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/browser/authentication-complete",
-      {},
-      "Ready to teach on the authorized synthetic record.",
-    ),
-);
-$("#resetSyntheticFixture").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/fixture/reset",
-      {},
-      "Synthetic fixture restored without changing the Studio artifact.",
-    ),
-);
-$("#startTeaching").addEventListener(
-  "click",
-  () => void mutate("/api/teaching/start", {}, "Teaching started."),
-);
-$("#rerecord").addEventListener(
-  "click",
-  () => void mutate("/api/teaching/start", {}, "Fresh demonstration started."),
-);
-$("#stopTeaching").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/teaching/stop",
-      {},
-      "Teaching stopped. Review the exact recorded timeline.",
-    ),
-);
-$("#restoreLastDemonstration").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/teaching/restore-last",
-      {},
-      "Last completed synthetic demonstration restored for compilation.",
-    ),
-);
-$("#recaptureOutcome").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/teaching/reconcile-outcome",
-      { useCurrentState: false },
-      "Current stable application state reconciled.",
-    ),
-);
-$("#useCurrentOutcome").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/teaching/reconcile-outcome",
-      { useCurrentState: true },
-      "Current stable state selected as demonstrated success.",
-    ),
-);
-
 async function compileWorkflow() {
   requestInFlight = true;
-  if (state) state.compilationDiagnostic = undefined;
-  renderCompilationDiagnostics(undefined);
+  if (state) {
+    state.diagnostic = undefined;
+    state.compilationDiagnostic = undefined;
+  }
+  renderDiagnostic(undefined);
   renderButtons();
   try {
     state = await api("/api/compile", {
       body: { instruction: $("#generalizationInstruction").value },
     });
     render();
-    toast(
-      "Validated artifact compiled. Animated and local run are both ready.",
-    );
+    toast("Local artifact compiled and ready to run.");
   } catch (error) {
-    const responseDiagnostic =
-      error instanceof ApiError ? error.diagnostic : undefined;
-    if (responseDiagnostic) {
-      if (state) state.compilationDiagnostic = responseDiagnostic;
-      renderCompilationDiagnostics(responseDiagnostic);
-      renderButtons();
-      $("#compilationDiagnostics").scrollIntoView({ block: "nearest" });
-    } else {
-      toast(error.message, true);
-    }
+    adoptDiagnostic(error);
     await refresh();
-    if (responseDiagnostic && !state?.compilationDiagnostic) {
-      if (state) state.compilationDiagnostic = responseDiagnostic;
-      renderCompilationDiagnostics(responseDiagnostic);
-    }
   } finally {
     requestInFlight = false;
     renderButtons();
   }
 }
-
-$("#compile").addEventListener("click", () => void compileWorkflow());
-$("#clearDiagnostics").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/compilation-diagnostics/clear",
-      {},
-      "Compilation diagnostics cleared.",
-    ),
-);
-$("#copyDiagnostics").addEventListener("click", async () => {
-  const diagnostic = state?.compilationDiagnostic;
-  if (!diagnostic) return;
-  try {
-    await navigator.clipboard.writeText(
-      formatCompilationDiagnostic(diagnostic),
-    );
-    toast("Compilation diagnostics copied.");
-  } catch {
-    toast("Diagnostics could not be copied.", true);
-  }
-});
 
 async function run(mode) {
   lastRunMode = mode;
   requestInFlight = true;
   renderButtons();
-  toast(
-    mode === "local"
-      ? "Running the deterministic artifact locally without animation."
-      : "Animated presentation is executing the same deterministic artifact.",
-  );
   try {
     state = await api("/api/run", { body: { mode } });
     render();
     toast(
-      `${state.telemetry.state}: runtime LLM calls ${state.metrics.runtimeLlmCalls}, OpenAI requests ${state.metrics.runtimeOpenAIRequests}.`,
-      state.telemetry.state !== "Passed",
+      `${state.telemetry.state}: LLM calls ${state.metrics.runtimeLlmCalls}, OpenAI requests ${state.metrics.runtimeOpenAIRequests}.`,
     );
   } catch (error) {
-    toast(error.message, true);
+    adoptDiagnostic(error);
     await refresh();
   } finally {
     requestInFlight = false;
@@ -691,8 +505,39 @@ async function run(mode) {
   }
 }
 
-$("#animatedRun").addEventListener("click", () => void run("animated"));
+$("#reopenBrowser").addEventListener("click", () => {
+  void mutate(
+    "/api/browser/open",
+    {},
+    "Managed browser reopened. Authentication remains manual.",
+  );
+});
+$("#returnHome").addEventListener("click", () => {
+  void mutate("/api/browser/home", {}, "Returned to the configured home page.");
+});
+$("#startTeaching").addEventListener("click", () => {
+  void mutate("/api/teaching/start", {}, "Teaching started.");
+});
+$("#stopTeaching").addEventListener("click", () => {
+  void mutate(
+    "/api/teaching/stop",
+    {},
+    "Teaching stopped after bounded stable-state reconciliation.",
+  );
+});
+$("#clearDemonstration").addEventListener("click", () => {
+  void mutate("/api/teaching/clear", {}, "Current demonstration cleared.");
+});
+$("#restoreLastDemonstration").addEventListener("click", () => {
+  void mutate(
+    "/api/teaching/restore-last",
+    {},
+    "Last compatible local demonstration restored.",
+  );
+});
+$("#compile").addEventListener("click", () => void compileWorkflow());
 $("#localRun").addEventListener("click", () => void run("local"));
+$("#animatedRun").addEventListener("click", () => void run("animated"));
 $("#runAgain").addEventListener("click", () => void run(lastRunMode));
 $("#stopAll").addEventListener("click", async () => {
   try {
@@ -700,47 +545,42 @@ $("#stopAll").addEventListener("click", async () => {
     toast("Stop requested.");
     await refresh();
   } catch (error) {
-    toast(error.message, true);
+    adoptDiagnostic(error);
   }
 });
-$("#reset").addEventListener(
-  "click",
-  () =>
-    void mutate(
-      "/api/reset",
-      {},
-      "Studio reset. Local browser context closed.",
-    ),
-);
-
-$("#generalizationInstruction").addEventListener("input", () => {
-  $("#compileMode").textContent = $("#generalizationInstruction").value.trim()
-    ? "mocked AI generalization"
-    : "direct-demonstration compiler";
-  clearTimeout(previewTimer);
-  if (state?.state !== "DEMONSTRATION_REVIEW") return;
-  previewTimer = setTimeout(async () => {
-    try {
-      const preview = await api("/api/ai-payload-preview", {
-        body: { instruction: $("#generalizationInstruction").value },
-      });
-      $("#payloadPreview").textContent = pretty(preview, "");
-    } catch (error) {
-      $("#payloadPreview").textContent = error.message;
-    }
-  }, 350);
+$("#reset").addEventListener("click", () => {
+  void mutate("/api/reset", {}, "Workflow reset. Managed browser kept open.");
 });
-
-for (const tab of $$(".tab")) {
-  tab.addEventListener("click", () => {
-    $$(".tab").forEach((candidate) =>
-      candidate.classList.toggle("active", candidate === tab),
-    );
-    $$(".tab-panel").forEach((panel) =>
-      panel.classList.toggle("active", panel.dataset.panel === tab.dataset.tab),
-    );
-  });
-}
+$("#clearDiagnostics").addEventListener("click", () => {
+  void mutate("/api/diagnostics/clear", {}, "Diagnostics cleared.");
+});
+$("#copyDiagnostics").addEventListener("click", async () => {
+  const diagnostic = state?.diagnostic ?? state?.compilationDiagnostic;
+  if (!diagnostic) return;
+  try {
+    await navigator.clipboard.writeText(formatDiagnostic(diagnostic));
+    toast("Diagnostics copied.");
+  } catch {
+    // Clipboard failure leaves the diagnostic visible.
+  }
+});
+$("#retryDiagnostic").addEventListener("click", () => {
+  const diagnostic = state?.diagnostic ?? state?.compilationDiagnostic;
+  if (!diagnostic) return;
+  if (diagnostic.stage === "browser-open") {
+    $("#reopenBrowser").click();
+  } else if (diagnostic.stage === "runtime-execution") {
+    void run(lastRunMode);
+  } else {
+    void compileWorkflow();
+  }
+});
+$("#generalizationInstruction").addEventListener("input", () => {
+  $("#compileMode").textContent =
+    $("#generalizationInstruction").value.trim().length > 0
+      ? "Mocked generalization — no live AI call"
+      : "Direct local compilation — no AI call";
+});
 
 await refresh();
 setInterval(() => {
