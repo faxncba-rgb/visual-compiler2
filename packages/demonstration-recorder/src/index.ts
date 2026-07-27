@@ -40,6 +40,15 @@ type RawApplicationState = {
   stableFieldFingerprints: Record<string, string>;
 };
 
+type RawStructuralSnapshot = {
+  documentToken?: string;
+  fingerprint: string;
+  visibleLandmarks: string[];
+  structuralOutline: string[];
+  origin: string;
+  pathname: string;
+};
+
 export type ActionableNodeEvidence = {
   tag: string;
   role?: string;
@@ -93,6 +102,8 @@ export type CapturedBrowserEvent = {
   key?: string;
   keyboardScope?: "focused-element" | "page";
   applicationStateBeforeAction?: RawApplicationState;
+  beforeSnapshot?: RawStructuralSnapshot;
+  documentToken?: string;
   captureSequence?: number;
   occurredAt: number;
 };
@@ -153,55 +164,70 @@ export function deriveOutcomeCandidates(
     input.after?.historySelector ??
     input.before?.historySelector ??
     "[data-vc-consultation-history] > li";
-  const candidates: ApplicationOutcomeCandidate[] = [
-    outcomeCandidate({
-      type: "relative-count-increase",
-      label: "Consultation history increased by one",
-      pageContextId: input.pageContextId,
-      target: historyTarget,
-      ...(input.sourceActionId ? { sourceActionId: input.sourceActionId } : {}),
-      ...(input.before?.historyCount !== undefined
-        ? { beforeCount: input.before.historyCount }
-        : {}),
-      ...(input.after?.historyCount !== undefined
-        ? { afterCount: input.after.historyCount }
-        : {}),
-      minimumIncrease: 1,
-      observed: historyObserved,
-      confidence: historyObserved ? 0.99 : 0,
-      recommended: historyObserved,
-      selected: historyObserved,
-      required: historyObserved,
-      rejectionReasons: historyObserved
-        ? []
-        : ["Scoped consultation-history count did not increase."],
-    }),
-    outcomeCandidate({
-      type: "new-scoped-item",
-      label: "A new scoped consultation history item appeared",
-      pageContextId: input.pageContextId,
-      target: historyTarget,
-      ...(input.sourceActionId ? { sourceActionId: input.sourceActionId } : {}),
-      observed: historyObserved,
-      confidence: historyObserved ? 0.96 : 0,
-      recommended: false,
-      rejectionReasons: historyObserved
-        ? []
-        : ["No new item was observed in the scoped history container."],
-    }),
-    outcomeCandidate({
-      type: "editor-reset",
-      label: "Consultation editor reset after save",
-      pageContextId: input.pageContextId,
-      target: '[data-vc-field="consultation"]',
-      ...(input.sourceActionId ? { sourceActionId: input.sourceActionId } : {}),
-      observed: input.editorResetObserved,
-      confidence: input.editorResetObserved ? 0.9 : 0,
-      recommended: false,
-      rejectionReasons: input.editorResetObserved
-        ? []
-        : ["The consultation editor was not observed empty after save."],
-    }),
+  const candidates: ApplicationOutcomeCandidate[] = [];
+  if (!historyUnavailable) {
+    candidates.push(
+      outcomeCandidate({
+        type: "relative-count-increase",
+        label: "Demonstrated scoped collection increased by one",
+        pageContextId: input.pageContextId,
+        target: historyTarget,
+        ...(input.sourceActionId
+          ? { sourceActionId: input.sourceActionId }
+          : {}),
+        ...(input.before?.historyCount !== undefined
+          ? { beforeCount: input.before.historyCount }
+          : {}),
+        ...(input.after?.historyCount !== undefined
+          ? { afterCount: input.after.historyCount }
+          : {}),
+        minimumIncrease: 1,
+        observed: historyObserved,
+        confidence: historyObserved ? 0.99 : 0,
+        recommended: historyObserved,
+        selected: historyObserved,
+        required: historyObserved,
+        rejectionReasons: historyObserved
+          ? []
+          : ["The demonstrated scoped collection count did not increase."],
+      }),
+      outcomeCandidate({
+        type: "new-scoped-item",
+        label: "A new item appeared in the demonstrated scoped collection",
+        pageContextId: input.pageContextId,
+        target: historyTarget,
+        ...(input.sourceActionId
+          ? { sourceActionId: input.sourceActionId }
+          : {}),
+        observed: historyObserved,
+        confidence: historyObserved ? 0.96 : 0,
+        recommended: false,
+        rejectionReasons: historyObserved
+          ? []
+          : ["No new item was observed in the scoped collection."],
+      }),
+    );
+  }
+  if (input.before?.editorPresent || input.after?.editorPresent) {
+    candidates.push(
+      outcomeCandidate({
+        type: "editor-reset",
+        label: "Demonstrated editor reset after the action",
+        pageContextId: input.pageContextId,
+        target: '[data-vc-field="consultation"]',
+        ...(input.sourceActionId
+          ? { sourceActionId: input.sourceActionId }
+          : {}),
+        observed: input.editorResetObserved,
+        confidence: input.editorResetObserved ? 0.9 : 0,
+        recommended: false,
+        rejectionReasons: input.editorResetObserved
+          ? []
+          : ["The demonstrated editor was not observed empty afterwards."],
+      }),
+    );
+  }
+  candidates.push(
     outcomeCandidate({
       type: "popup-lifecycle",
       label: "Expected validation popup completed",
@@ -226,7 +252,7 @@ export function deriveOutcomeCandidates(
     }),
     outcomeCandidate({
       type: "returned-to-page",
-      label: "Returned to consultation page",
+      label: "Returned to the demonstrated page",
       pageContextId: input.pageContextId,
       target: input.after?.pathname ?? input.before?.pathname ?? "/",
       ...(input.sourceActionId ? { sourceActionId: input.sourceActionId } : {}),
@@ -245,7 +271,7 @@ export function deriveOutcomeCandidates(
             "The application did not return to the demonstrated canonical page.",
           ],
     }),
-  ];
+  );
   for (const variableRef of input.variableRefsInNewItem) {
     candidates.push(
       outcomeCandidate({
@@ -425,6 +451,47 @@ const RECORDER_INIT_SCRIPT = `(() => {
     }
     return 'fnv1a-' + (result >>> 0).toString(16).padStart(8, '0');
   };
+  const canonicalUrl = value => {
+    if (!value) return undefined;
+    try {
+      const url = new URL(value, location.href);
+      return url.origin + (url.pathname || '/');
+    } catch {
+      return undefined;
+    }
+  };
+  const safeCode = value => {
+    const normalized = text(value).slice(0, 240);
+    if (!normalized) return undefined;
+    return normalized
+      .replace(/https?:\\/\\/[^\\s'"]+/gi, match => canonicalUrl(match) || '[REDACTED_URL]')
+      .replace(/(['"])(?:(?!\\1).){12,}\\1/g, '$1[REDACTED]$1')
+      .replace(/\\b\\d{6,}\\b/g, '[REDACTED]');
+  };
+  const structuralSnapshot = () => {
+    const landmarks = Array.from(document.querySelectorAll('h1,h2,h3,[role=heading],[role=status]'))
+      .map(node => staticInterfaceText(node.textContent))
+      .filter(Boolean)
+      .slice(0, 20);
+    const outline = Array.from(document.querySelectorAll('main,nav,form,table,section,article,button,a[href],select,input,textarea,[role]'))
+      .slice(0, 80)
+      .map(node => [
+        node.tagName.toLowerCase(),
+        role(node) || '',
+        staticInterfaceText(node.getAttribute('aria-label')) || '',
+        staticInterfaceText(node.getAttribute('title')) || '',
+        node.closest('form')?.getAttribute('name') || ''
+      ].join(':'))
+      .slice(0, 32);
+    return {
+      documentToken: globalThis.__vc2DocumentToken,
+      fingerprint: hash([location.origin, location.pathname, ...outline].join('|')),
+      visibleLandmarks: landmarks,
+      structuralOutline: outline,
+      origin: location.origin,
+      pathname: location.pathname
+    };
+  };
   const applicationState = () => {
     const history = document.querySelector('[data-vc-consultation-history]');
     let editor = document.querySelector('[data-vc-field=consultation]');
@@ -519,6 +586,116 @@ const RECORDER_INIT_SCRIPT = `(() => {
     const targetLabel = label(element);
     const stableProbe = element.getAttribute('data-vc-field') || element.getAttribute('data-vc-action') || element.getAttribute('name');
     const transientAncestor = element.closest('[role=menu],[role=listbox],[role=dialog],dialog,[popover]');
+    const raw = rawElement instanceof Element ? rawElement : element;
+    const icon = raw.matches('img,svg,use,i,[role=img]') ? raw :
+      raw.querySelector?.('img,svg,use,i,[role=img]') ||
+      element.querySelector?.('img,svg,use,i,[role=img]');
+    const link = element.closest('a') || (element.matches('a') ? element : undefined);
+    const form = element.closest('form');
+    const row = element.closest('tr');
+    const cell = element.closest('th,td');
+    const table = row?.closest('table');
+    const rows = table ? Array.from(table.querySelectorAll('tr')) : [];
+    const cells = row ? Array.from(row.querySelectorAll(':scope > th,:scope > td')) : [];
+    const headers = table
+      ? Array.from(table.querySelectorAll('thead th,tr:first-child th'))
+          .map(node => staticInterfaceText(node.textContent))
+          .filter(Boolean)
+          .slice(0, 12)
+      : [];
+    const rowText = row
+      ? cells
+          .map(node => staticInterfaceText(node.textContent))
+          .filter(Boolean)
+          .slice(0, 12)
+      : [];
+    const rawSrc = raw instanceof HTMLImageElement ? raw.src :
+      raw.getAttribute('src') || raw.getAttribute('href');
+    const iconSrc = icon instanceof HTMLImageElement ? icon.src :
+      icon?.getAttribute?.('src') || icon?.getAttribute?.('href');
+    const canonicalHref = link ? canonicalUrl(link.href || link.getAttribute('href')) : undefined;
+    const iconAlt = icon ? staticInterfaceText(icon.getAttribute('alt')) : undefined;
+    const iconTitle = icon ? staticInterfaceText(icon.getAttribute('title')) : undefined;
+    const canonicalIconSrc = canonicalUrl(iconSrc);
+    const iconMatches = candidate => {
+      if (!(candidate instanceof Element)) return false;
+      if (iconAlt && staticInterfaceText(candidate.getAttribute('alt')) !== iconAlt) return false;
+      if (iconTitle && staticInterfaceText(candidate.getAttribute('title')) !== iconTitle) return false;
+      if (canonicalIconSrc) {
+        const candidateSrc = candidate instanceof HTMLImageElement ? candidate.src :
+          candidate.getAttribute('src') || candidate.getAttribute('href');
+        if (canonicalUrl(candidateSrc) !== canonicalIconSrc) return false;
+      }
+      return Boolean(iconAlt || iconTitle || canonicalIconSrc);
+    };
+    const canonicalHrefMatchCount = canonicalHref
+      ? Array.from(document.querySelectorAll('a[href]'))
+          .filter(candidate => canonicalUrl(candidate.href || candidate.getAttribute('href')) === canonicalHref).length
+      : 0;
+    const iconMatchCount = icon
+      ? Array.from(document.querySelectorAll('a[href] img,a[onclick] img,a[href] svg,a[onclick] svg,a[href] [role=img],a[onclick] [role=img]'))
+          .filter(iconMatches).length
+      : 0;
+    const rowIconMatchCount = row && icon
+      ? Array.from(document.querySelectorAll('tr')).filter(candidateRow => {
+          const candidateTexts = Array.from(candidateRow.querySelectorAll(':scope > th,:scope > td'))
+            .map(node => staticInterfaceText(node.textContent))
+            .filter(Boolean);
+          const sameRow = rowText.length > 0 && rowText.every(value => candidateTexts.includes(value));
+          return sameRow && Array.from(candidateRow.querySelectorAll('a img,a svg,a [role=img]')).some(iconMatches);
+        }).length
+      : 0;
+    const clickEvidence = {
+      rawTarget: {
+        tag: raw.tagName.toLowerCase(),
+        role: role(raw),
+        alt: staticInterfaceText(raw.getAttribute('alt')),
+        title: staticInterfaceText(raw.getAttribute('title')),
+        src: canonicalUrl(rawSrc),
+        structuralPath: cssPath(raw)
+      },
+      normalizedClickable: {
+        tag: element.tagName.toLowerCase(),
+        role: role(element),
+        accessibleName: accessibleName(element) || undefined,
+        structuralPath: cssPath(element)
+      },
+      icon: icon ? {
+        tag: icon.tagName.toLowerCase(),
+        alt: iconAlt,
+        title: iconTitle,
+        src: canonicalIconSrc
+      } : undefined,
+      canonicalHref,
+      onclick: safeCode(element.getAttribute('onclick') || link?.getAttribute('onclick')),
+      form: form ? {
+        name: staticInterfaceText(form.getAttribute('name')),
+        id: staticInterfaceText(form.getAttribute('id')),
+        action: canonicalUrl(form.getAttribute('action'))
+      } : undefined,
+      table: row && cell ? {
+        rowIndex: Math.max(0, rows.indexOf(row)),
+        columnIndex: Math.max(0, cells.indexOf(cell)),
+        headers,
+        rowText
+      } : undefined,
+      domRelations: [
+        raw === element ? 'raw-is-normalized' : 'raw-descendant-of-normalized',
+        ...Array.from(raw.parentElement ? [raw.parentElement] : [])
+          .map(node => node.tagName.toLowerCase() + '>' + element.tagName.toLowerCase())
+      ],
+      structuralSnapshot: [
+        cssPath(raw),
+        cssPath(element),
+        ...(row ? [cssPath(row)] : []),
+        ...(table ? [cssPath(table)] : [])
+      ],
+      captureValidation: {
+        canonicalHrefMatchCount,
+        iconMatchCount,
+        rowIconMatchCount
+      }
+    };
     return {
       fingerprint: hash(signature),
       tag: element.tagName.toLowerCase(),
@@ -568,13 +745,17 @@ const RECORDER_INIT_SCRIPT = `(() => {
       captureContext: {
         transient: Boolean(transientAncestor),
         ancestorRole: transientAncestor ? (role(transientAncestor) || transientAncestor.tagName.toLowerCase()) : undefined
-      }
+      },
+      clickEvidence
     };
   };
   const send = payload => {
     try {
+      const beforeSnapshot = structuralSnapshot();
       return Promise.resolve(globalThis.__vc2Record({
         ...payload,
+        beforeSnapshot,
+        documentToken: beforeSnapshot.documentToken,
         captureSequence: ++captureSequence
       })).catch(() => undefined);
     } catch {
@@ -738,7 +919,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
     const focused = document.activeElement instanceof Element ? document.activeElement : undefined;
     const pageScoped = !focused || focused === document.body || focused === document.documentElement;
     const focusOwner = pageScoped ? undefined : (actionableAncestor(focused) || focused);
-    const significantCharacter = event.key.length === 1 && !isEditable(focusOwner);
+    const significantCharacter = event.key.length === 1 &&
+      (!isEditable(focusOwner) || focusOwner instanceof HTMLSelectElement);
     const meaningful = significantCharacter || ['Enter','Escape','Tab','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key);
     if (!meaningful && modifiers.length === 0) return;
     const info = focusOwner ? target(focusOwner, event.target) : undefined;
@@ -978,6 +1160,7 @@ export class DemonstrationRecorder {
   readonly #pendingBrowserEvents = new Set<Promise<void>>();
   #localValues = new Map<string, string>();
   #editingActions = new Map<string, RecordedAction>();
+  #recentNormalizedSelects = new Map<string, number>();
   #lastRuntimeVariableName: string | undefined;
   #nextRuntimeVariable = 1;
   #passwordEventsExcluded = 0;
@@ -1093,6 +1276,7 @@ export class DemonstrationRecorder {
     this.#pendingBrowserEvents.clear();
     this.#localValues.clear();
     this.#editingActions.clear();
+    this.#recentNormalizedSelects.clear();
     this.#lastRuntimeVariableName = undefined;
     this.#nextRuntimeVariable = 1;
     this.#saveObservation = undefined;
@@ -1180,6 +1364,7 @@ export class DemonstrationRecorder {
         (left.captureSequence ?? left.sequence ?? 0) -
           (right.captureSequence ?? right.sequence ?? 0),
     );
+    this.#normalizeSelectionsBeforeFinalize();
     this.#session.actions.forEach((action, index) => {
       action.sequence = index + 1;
     });
@@ -1188,13 +1373,16 @@ export class DemonstrationRecorder {
     return this.session;
   }
 
-  async #snapshot() {
-    const page = this.context
-      .pages()
-      .find((candidate) => !candidate.isClosed());
-    if (!page) return undefined;
-    const pageContextId = await this.graph.contextIdForPage(page);
-    const landmarks = await page
+  async #snapshot(source?: Page | Frame) {
+    const root =
+      source ?? this.context.pages().find((candidate) => !candidate.isClosed());
+    if (!root) return undefined;
+    const page = "page" in root ? root.page() : root;
+    if (page.isClosed() || ("isDetached" in root && root.isDetached()))
+      return undefined;
+    const frame = "page" in root ? root : root.mainFrame();
+    const pageContextId = await this.graph.contextIdForFrame(frame);
+    const landmarks = await root
       .locator("h1,h2,[role=status],[role=main]")
       .allTextContents()
       .catch(() => []);
@@ -1206,6 +1394,9 @@ export class DemonstrationRecorder {
       pageContextId,
       fingerprint: sha256(JSON.stringify(visibleLandmarks)),
       visibleLandmarks,
+      origin: canonicalizeUrl(frame.url()).origin,
+      pathname: canonicalizeUrl(frame.url()).pathname,
+      structuralOutline: [],
       capturedAt: new Date().toISOString(),
     };
   }
@@ -1213,11 +1404,17 @@ export class DemonstrationRecorder {
   async #waitForDomStability(
     quietPeriodMs = this.options.domQuietPeriodMs ?? 500,
     maximumObservationMs = this.options.maximumFinalReconciliationMs ?? 5_000,
+    source?: Page | Frame,
   ): Promise<DomStabilityResult> {
-    const page = this.context
-      .pages()
-      .find((candidate) => !candidate.isClosed());
-    if (!page)
+    const root =
+      source ?? this.context.pages().find((candidate) => !candidate.isClosed());
+    const page = root && ("page" in root ? root.page() : root);
+    if (
+      !root ||
+      !page ||
+      page.isClosed() ||
+      ("isDetached" in root && root.isDetached())
+    )
       return {
         stable: false,
         observedForMs: 0,
@@ -1225,7 +1422,7 @@ export class DemonstrationRecorder {
         quietPeriodMs,
         maximumObservationMs,
       };
-    const result = await page
+    const result = await root
       .evaluate(
         ({ quietPeriod, maximumObservation }) =>
           new Promise<{
@@ -1514,12 +1711,12 @@ export class DemonstrationRecorder {
             : undefined;
           return Boolean(
             recorded?.role === "frame" &&
-              recorded.status === "closed" &&
+              ["closed", "replaced"].includes(recorded.status) &&
               this.#session!.pageGraph.nodes.some(
                 (node) =>
                   node.id !== recorded.id &&
                   node.role === "frame" &&
-                  node.status === "open" &&
+                  ["active", "open"].includes(node.status) &&
                   node.origin === recorded.origin &&
                   node.pathname === recorded.pathname,
               ),
@@ -1681,7 +1878,10 @@ export class DemonstrationRecorder {
       this.#passwordEventsExcluded += 1;
       return;
     }
-    const pageContextId = await this.graph.contextIdForFrame(frame);
+    const pageContextId = await this.graph.contextIdForFrame(
+      frame,
+      payload.documentToken,
+    );
     const graphNode = this.graph.node(pageContextId);
     const hostEvidence = payload.target
       ? await frameHostEvidence(frame)
@@ -1870,10 +2070,32 @@ export class DemonstrationRecorder {
       ...(payload.keyboardScope
         ? { keyboardScope: payload.keyboardScope }
         : {}),
+      ...(payload.beforeSnapshot
+        ? {
+            beforeState: {
+              pageContextId,
+              fingerprint: payload.beforeSnapshot.fingerprint,
+              visibleLandmarks: payload.beforeSnapshot.visibleLandmarks,
+              origin: payload.beforeSnapshot.origin,
+              pathname: payload.beforeSnapshot.pathname,
+              structuralOutline: payload.beforeSnapshot.structuralOutline,
+              capturedAt: new Date(payload.occurredAt).toISOString(),
+            },
+          }
+        : {}),
       observedEffects: [],
       timestampOffsetMs: Math.max(0, payload.occurredAt - this.#startedAtMs),
       optional: false,
     });
+    if (
+      recorded.action === "click" &&
+      recorded.target &&
+      (this.#recentNormalizedSelects.get(
+        `${recorded.pageContextId}:${recorded.target.fingerprint}`,
+      ) ?? -Infinity) >=
+        recorded.timestampOffsetMs - 600
+    )
+      return;
     let persistedAction: RecordedAction | undefined;
     if (payload.editingTransaction) {
       const existing = this.#editingActions.get(payload.editingTransaction.id);
@@ -1888,6 +2110,8 @@ export class DemonstrationRecorder {
         persistedAction = recorded;
       }
       if (payload.editingTransaction.phase === "update") return;
+      if (persistedAction.action === "select")
+        this.#normalizeNativeSelection(persistedAction);
     } else {
       const disposition = deduplicateAction(this.#session.actions, recorded);
       persistedAction =
@@ -1932,8 +2156,31 @@ export class DemonstrationRecorder {
       });
     }
     if (persistedAction) {
-      const reaction = await this.#waitForDomStability(120, 900);
-      persistedAction.resultingState = await this.#snapshot();
+      const reaction = await this.#waitForDomStability(120, 900, frame);
+      persistedAction.resultingState = await this.#snapshot(frame);
+      if (
+        persistedAction.target?.frame.role === "main" &&
+        persistedAction.resultingState &&
+        persistedAction.resultingState.pageContextId !==
+          persistedAction.pageContextId &&
+        !persistedAction.observedEffects.some(
+          (effect) =>
+            effect.type === "navigation" &&
+            effect.pageContextId ===
+              persistedAction.resultingState?.pageContextId,
+        )
+      ) {
+        const resultingContext = this.graph.node(
+          persistedAction.resultingState.pageContextId,
+        );
+        if (resultingContext)
+          persistedAction.observedEffects.push({
+            type: "navigation",
+            pageContextId: resultingContext.id,
+            fingerprint: resultingContext.structuralFingerprint,
+            description: `${resultingContext.origin}${resultingContext.pathname}`,
+          });
+      }
       if (
         reaction.mutationCount > 0 &&
         !persistedAction.observedEffects.some(
@@ -1960,6 +2207,94 @@ export class DemonstrationRecorder {
         });
       }
     }
+  }
+
+  #normalizeNativeSelection(selection: RecordedAction) {
+    if (!this.#session || !selection.target) return;
+    const selectionIndex = this.#session.actions.indexOf(selection);
+    if (selectionIndex < 0) return;
+    const gestureIndexes: number[] = [];
+    const keys: string[] = [];
+    for (let index = selectionIndex - 1; index >= 0; index -= 1) {
+      const candidate = this.#session.actions[index]!;
+      if (
+        selection.timestampOffsetMs - candidate.timestampOffsetMs > 2_500 ||
+        candidate.pageContextId !== selection.pageContextId
+      )
+        break;
+      if (candidate.target?.fingerprint !== selection.target.fingerprint)
+        continue;
+      if (candidate.action === "keyboard" && candidate.key) {
+        keys.unshift(candidate.key);
+        gestureIndexes.unshift(index);
+        continue;
+      }
+      if (candidate.action === "click") {
+        gestureIndexes.unshift(index);
+        break;
+      }
+    }
+    if (
+      keys.length === 0 ||
+      !selection.editingTransaction ||
+      selection.editingTransaction.inputEvents === 0
+    )
+      return;
+    const firstGesture = this.#session.actions[gestureIndexes[0] ?? -1];
+    selection.selectionGesture = {
+      keys,
+      nativeChangeObserved: true,
+      replayKeyboardEvents: false,
+    };
+    if (firstGesture?.beforeState)
+      selection.beforeState = firstGesture.beforeState;
+    for (const index of [...gestureIndexes].sort((left, right) => right - left))
+      this.#session.actions.splice(index, 1);
+    this.#recentNormalizedSelects.set(
+      `${selection.pageContextId}:${selection.target.fingerprint}`,
+      selection.timestampOffsetMs,
+    );
+  }
+
+  #normalizeSelectionsBeforeFinalize() {
+    if (!this.#session) return;
+    for (const action of [...this.#session.actions]) {
+      if (action.action === "select" && !action.selectionGesture)
+        this.#normalizeNativeSelection(action);
+    }
+    const normalizedSelections = this.#session.actions.filter(
+      (action) => action.action === "select" && action.selectionGesture,
+    );
+    for (const selection of normalizedSelections) {
+      const followingKeys = this.#session.actions
+        .filter(
+          (action) =>
+            action.action === "keyboard" &&
+            Boolean(action.key) &&
+            action.target?.fingerprint === selection.target?.fingerprint &&
+            action.pageContextId === selection.pageContextId &&
+            action.timestampOffsetMs >= selection.timestampOffsetMs &&
+            action.timestampOffsetMs - selection.timestampOffsetMs <= 600,
+        )
+        .sort(
+          (left, right) =>
+            left.timestampOffsetMs - right.timestampOffsetMs ||
+            (left.captureSequence ?? 0) - (right.captureSequence ?? 0),
+        )
+        .map((action) => action.key!);
+      selection.selectionGesture!.keys.push(...followingKeys);
+    }
+    this.#session.actions = this.#session.actions.filter((action) => {
+      if (!["click", "keyboard"].includes(action.action) || !action.target)
+        return true;
+      return !normalizedSelections.some(
+        (selection) =>
+          selection.target?.fingerprint === action.target?.fingerprint &&
+          selection.pageContextId === action.pageContextId &&
+          action.timestampOffsetMs >= selection.timestampOffsetMs &&
+          action.timestampOffsetMs - selection.timestampOffsetMs <= 600,
+      );
+    });
   }
 
   #handleGraphEvent(event: PageGraphEvent) {
@@ -2023,26 +2358,44 @@ export class DemonstrationRecorder {
         }),
       );
     } else if (event.type === "navigation") {
-      this.#session.actions.push(
-        RecordedActionSchema.parse({
-          id: createId("action"),
-          sequence: this.#nextSequence++,
+      if (event.context.role === "popup") {
+        const popupOpen = [...this.#session.actions]
+          .reverse()
+          .find(
+            (action) =>
+              action.action === "popup-open" &&
+              action.pageContextId === event.previousContextId,
+          );
+        if (popupOpen) {
+          popupOpen.pageContextId = event.context.id;
+          for (const effect of popupOpen.observedEffects) {
+            if (effect.pageContextId === event.previousContextId)
+              effect.pageContextId = event.context.id;
+          }
+        }
+      }
+      const sourceAction = causedByActionId
+        ? this.#session.actions.find((action) => action.id === causedByActionId)
+        : undefined;
+      const navigatedToDifferentDocumentPath =
+        sourceAction?.beforeState?.origin !== event.context.origin ||
+        sourceAction?.beforeState?.pathname !== event.context.pathname;
+      if (
+        sourceAction &&
+        sourceAction.pageContextId === event.previousContextId &&
+        navigatedToDifferentDocumentPath &&
+        !sourceAction.observedEffects.some(
+          (effect) =>
+            effect.type === "navigation" &&
+            effect.pageContextId === event.context.id,
+        )
+      )
+        sourceAction.observedEffects.push({
+          type: "navigation",
           pageContextId: event.context.id,
-          action: "navigation",
-          name: `${pageLabel(event.context.role)} — navigated`,
-          observedEffects: [
-            {
-              type: "navigation",
-              pageContextId: event.context.id,
-              fingerprint: event.context.structuralFingerprint,
-              description: `${event.context.origin}${event.context.pathname}`,
-            },
-          ],
-          ...(causedByActionId ? { causedByActionId } : {}),
-          timestampOffsetMs,
-          optional: false,
-        }),
-      );
+          fingerprint: event.context.structuralFingerprint,
+          description: `${event.context.origin}${event.context.pathname}`,
+        });
     }
   }
 

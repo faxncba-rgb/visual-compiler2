@@ -405,6 +405,40 @@ export class DeterministicRuntime {
     }
   }
 
+  #entryMainContext() {
+    const contexts = this.#workflow.pageContexts;
+    let current = contexts.find(
+      (context) => context.id === this.#workflow.steps[0]?.pageContextId,
+    );
+    const visited = new Set<string>();
+    while (current?.parentId && current.role !== "main") {
+      if (visited.has(current.id)) break;
+      visited.add(current.id);
+      current = contexts.find(
+        (candidate) => candidate.id === current?.parentId,
+      );
+    }
+    if (current?.role === "main") return current;
+    return (
+      [...contexts]
+        .reverse()
+        .find(
+          (context) =>
+            context.role === "main" &&
+            ["active", "open"].includes(context.status),
+        ) ?? contexts.find((context) => context.role === "main")
+    );
+  }
+
+  #resolvedMainContext() {
+    const entry = this.#entryMainContext();
+    if (entry && this.#pages.resolved.has(entry.id)) return entry;
+    return this.#workflow.pageContexts.find(
+      (context) =>
+        context.role === "main" && this.#pages.resolved.has(context.id),
+    );
+  }
+
   async #resolveInitialContexts() {
     const openPages = this.options.context
       .pages()
@@ -418,10 +452,9 @@ export class DeterministicRuntime {
       );
       if (exact) this.#pages.resolved.set(pageContext.id, exact);
     }
-    const requiredMain = this.#workflow.pageContexts.find(
-      (context) => context.role === "main",
-    );
+    const requiredMain = this.#entryMainContext();
     if (requiredMain && !this.#pages.resolved.has(requiredMain.id)) {
+      if (this.#resolvedMainContext()) return;
       const firstMainTarget = this.#workflow.steps.find(
         (step) => step.target?.frame.role === "main",
       )?.target?.frame;
@@ -450,11 +483,17 @@ export class DeterministicRuntime {
   async #resolveContext(step: CompiledStep): Promise<LocatorRoot> {
     const already = this.#pages.resolved.get(step.pageContextId);
     if (already) {
+      const expected = this.#workflow.pageContexts.find(
+        (candidate) => candidate.id === step.pageContextId,
+      );
       const stillAvailable =
         "isDetached" in already
           ? !(already as Frame).isDetached()
           : !(already as Page).isClosed();
-      if (stillAvailable) return already;
+      const stillAtDocument =
+        !expected ||
+        ("url" in already && canonicalMatches(already.url(), expected));
+      if (stillAvailable && stillAtDocument) return already;
       this.#pages.resolved.delete(step.pageContextId);
     }
     const pageContext = this.#workflow.pageContexts.find(
@@ -728,7 +767,7 @@ export class DeterministicRuntime {
       const pageContext = this.#workflow.pageContexts.find(
         (candidate) => candidate.id === step.pageContextId,
       );
-      const page = this.#pages.resolved.get(step.pageContextId);
+      const page = await this.#resolveContext(step);
       if (
         pageContext &&
         page &&
@@ -883,6 +922,24 @@ export class DeterministicRuntime {
         });
         if (!synchronized)
           throw new Error("Legacy editor backing field did not synchronize.");
+      } else if (condition.type === "url-path") {
+        const root = this.#pages.resolved.get(step.pageContextId);
+        const page =
+          root && "mainFrame" in root
+            ? (root as Page)
+            : root && "page" in root
+              ? (root as Frame).page()
+              : undefined;
+        const expectedPath =
+          typeof condition.expected === "string"
+            ? condition.expected
+            : undefined;
+        if (
+          !page ||
+          !expectedPath ||
+          canonicalizeUrl(page.url()).pathname !== expectedPath
+        )
+          throw new Error("Demonstrated navigation postcondition failed.");
       }
     }
   }
@@ -892,9 +949,7 @@ export class DeterministicRuntime {
   }
 
   async #captureOutcomeBaselines() {
-    const mainContext = this.#workflow.pageContexts.find(
-      (candidate) => candidate.role === "main",
-    );
+    const mainContext = this.#resolvedMainContext();
     const mainPage = mainContext
       ? (this.#pages.resolved.get(mainContext.id) as Page | undefined)
       : undefined;
@@ -946,9 +1001,7 @@ export class DeterministicRuntime {
 
   async #verifyOutcome() {
     const checks: RuntimeTelemetry["outcomeChecks"] = [];
-    const mainContext = this.#workflow.pageContexts.find(
-      (candidate) => candidate.role === "main",
-    );
+    const mainContext = this.#resolvedMainContext();
     const mainPage = mainContext
       ? (this.#pages.resolved.get(mainContext.id) as Page | undefined)
       : undefined;

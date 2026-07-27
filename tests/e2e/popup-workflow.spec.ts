@@ -51,7 +51,7 @@ test("records and replays an action inside a popup, closure, and return to opene
           expect.objectContaining({ action: "popup-open" }),
           expect.objectContaining({
             action: "fill",
-            pageContextId: expect.stringMatching(/^page-/),
+            pageContextId: expect.stringMatching(/^document-/),
             value: {
               kind: "literal",
               value: popupLiteral,
@@ -60,7 +60,7 @@ test("records and replays an action inside a popup, closure, and return to opene
           }),
           expect.objectContaining({
             action: "select",
-            pageContextId: expect.stringMatching(/^page-/),
+            pageContextId: expect.stringMatching(/^document-/),
           }),
           expect.objectContaining({ action: "popup-close" }),
         ]),
@@ -74,7 +74,10 @@ test("records and replays an action inside a popup, closure, and return to opene
           }),
         ]),
       );
-      const popupNode = session.pages.find((node) => node.role === "popup");
+      const popupNode = session.pages.find(
+        (node) =>
+          node.role === "popup" && node.pathname === "/fixture/popup-action",
+      );
       expect(popupNode).toMatchObject({
         parentId: expect.any(String),
         pathname: "/fixture/popup-action",
@@ -83,6 +86,9 @@ test("records and replays an action inside a popup, closure, and return to opene
 
       const values = recorder.localValues;
       const workflow = await compilePrimary({ browser, session, values });
+      expect(
+        workflow.steps.find((step) => step.action === "fill")?.postconditions,
+      ).toEqual([]);
       await browser.navigate(`${fixtureOrigin}/fixture/popup-workflow`);
       const telemetry = await new DeterministicRuntime({
         context: browser.context,
@@ -90,7 +96,9 @@ test("records and replays an action inside a popup, closure, and return to opene
         variables: values,
         mode: "local",
       }).run();
-      expect(telemetry.state).toBe("Passed");
+      expect(telemetry.state, JSON.stringify(telemetry, null, 2)).toBe(
+        "Passed",
+      );
       expect(telemetry.llmCalls).toBe(0);
       expect(telemetry.openAIRequests).toBe(0);
       await expect(

@@ -279,7 +279,9 @@ describe("high-level recorder", () => {
       ),
     ).toMatchObject({
       observed: false,
-      rejectionReasons: ["Scoped consultation-history count did not increase."],
+      rejectionReasons: [
+        "The demonstrated scoped collection count did not increase.",
+      ],
     });
   });
 });

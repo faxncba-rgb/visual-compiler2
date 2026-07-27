@@ -57,6 +57,9 @@ const strategyWeight: Record<LocatorCandidate["strategy"], number> = {
   "form-ownership": 0.9,
   "neighbor-label": 0.76,
   "same-row-column": 0.68,
+  "canonical-href": 0.96,
+  "icon-evidence": 0.94,
+  "row-icon-context": 0.98,
   "stable-attribute": 0.72,
   "structural-fallback": 0.5,
   "bounding-box": 0.2,
@@ -215,6 +218,80 @@ export function generateLocatorCandidates(
       ),
     );
   }
+  const click = target.clickEvidence;
+  if (click?.canonicalHref) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "canonical-href",
+          canonicalHref: click.canonicalHref,
+          ...(click.icon?.alt ? { iconAlt: click.icon.alt } : {}),
+          ...(click.icon?.title ? { iconTitle: click.icon.title } : {}),
+          ...(click.icon?.src ? { iconSrc: click.icon.src } : {}),
+        },
+        `link[href=${JSON.stringify(click.canonicalHref)}]`,
+        0.97,
+        0.95,
+        "Canonical query-free href captured on the demonstrated clickable ancestor.",
+        order++,
+      ),
+    );
+  }
+  if (click?.icon && (click.icon.alt || click.icon.title || click.icon.src)) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "icon-evidence",
+          ...(click.icon.alt ? { iconAlt: click.icon.alt } : {}),
+          ...(click.icon.title ? { iconTitle: click.icon.title } : {}),
+          ...(click.icon.src ? { iconSrc: click.icon.src } : {}),
+          ...(click.canonicalHref
+            ? { canonicalHref: click.canonicalHref }
+            : {}),
+        },
+        `clickable:has(icon[alt=${JSON.stringify(click.icon.alt ?? "")}])`,
+        0.95,
+        0.93,
+        "Raw icon identity retained together with its normalized clickable ancestor.",
+        order++,
+      ),
+    );
+  }
+  const stableRowText = click?.table?.rowText.find(Boolean);
+  if (
+    click?.table &&
+    stableRowText &&
+    click.icon &&
+    (click.icon.alt || click.icon.title || click.icon.src)
+  ) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "row-icon-context",
+          rowText: stableRowText,
+          ...(click.table.headers[click.table.columnIndex]
+            ? {
+                columnHeader: click.table.headers[click.table.columnIndex],
+              }
+            : {}),
+          ...(click.icon.alt ? { iconAlt: click.icon.alt } : {}),
+          ...(click.icon.title ? { iconTitle: click.icon.title } : {}),
+          ...(click.icon.src ? { iconSrc: click.icon.src } : {}),
+          ...(click.canonicalHref
+            ? { canonicalHref: click.canonicalHref }
+            : {}),
+        },
+        `row(${JSON.stringify(stableRowText)}).clickable-icon`,
+        0.99,
+        0.97,
+        "Table row content, column header, icon identity and canonical link agree.",
+        order++,
+      ),
+    );
+  }
   for (const attribute of ["data-vc-field", "data-vc-action", "data-testid"]) {
     const attributeValue = target.stableAttributes[attribute];
     if (!attributeValue) continue;
@@ -318,6 +395,26 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       ? locator.filter({ hasText: exactStaticTextPattern(rule.staticText) })
       : locator;
   }
+  if (
+    rule.strategy === "canonical-href" ||
+    rule.strategy === "icon-evidence" ||
+    rule.strategy === "row-icon-context"
+  ) {
+    const hrefSelector = rule.canonicalHref
+      ? canonicalHrefSelector(rule.canonicalHref)
+      : "a[href],a[onclick],[role=link]";
+    const iconSelector = iconEvidenceSelector(rule);
+    let scope: Locator = root.locator(hrefSelector);
+    if (rule.strategy === "row-icon-context") {
+      if (!rule.rowText)
+        throw new Error("Row/icon locator is missing captured row text.");
+      const row = root.locator("tr").filter({ hasText: rule.rowText });
+      scope = row.locator(hrefSelector);
+    }
+    return iconSelector
+      ? scope.filter({ has: root.locator(iconSelector) })
+      : scope;
+  }
   if (rule.strategy === "stable-attribute") {
     if (!rule.attribute || !rule.attributeValue)
       throw new Error("Stable-attribute locator is incomplete.");
@@ -339,6 +436,27 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       .locator(rule.structuralPath);
   }
   throw new Error(`Locator strategy ${rule.strategy} is not executable.`);
+}
+
+function canonicalHrefSelector(value: string) {
+  const url = new URL(value);
+  const pathname = escapeForAttribute(url.pathname || "/");
+  const canonical = escapeForAttribute(`${url.origin}${url.pathname || "/"}`);
+  return `a[href^="${pathname}"],a[href^="${canonical}"]`;
+}
+
+function iconEvidenceSelector(rule: LocatorRule) {
+  if (rule.iconAlt)
+    return `img[alt="${escapeForAttribute(rule.iconAlt)}"],[role="img"][aria-label="${escapeForAttribute(rule.iconAlt)}"]`;
+  if (rule.iconTitle)
+    return `img[title="${escapeForAttribute(rule.iconTitle)}"],[role="img"][title="${escapeForAttribute(rule.iconTitle)}"]`;
+  if (rule.iconSrc) {
+    const url = new URL(rule.iconSrc);
+    const pathname = escapeForAttribute(url.pathname || "/");
+    const canonical = escapeForAttribute(`${url.origin}${url.pathname || "/"}`);
+    return `img[src^="${pathname}"],img[src^="${canonical}"]`;
+  }
+  return undefined;
 }
 
 function exactStaticTextPattern(value: string) {
@@ -480,11 +598,19 @@ export function validateCapturedLocatorCandidates(
           ? target.captureValidation.roleNameMatchCount
           : candidate.strategy === "label-association"
             ? target.captureValidation.labelMatchCount
-            : ["form-control-name", "stable-attribute"].includes(
-                  candidate.strategy,
-                )
-              ? target.captureValidation.stableAttributeMatchCount
-              : 1;
+            : candidate.strategy === "canonical-href"
+              ? (target.clickEvidence?.captureValidation
+                  .canonicalHrefMatchCount ?? 0)
+              : candidate.strategy === "icon-evidence"
+                ? (target.clickEvidence?.captureValidation.iconMatchCount ?? 0)
+                : candidate.strategy === "row-icon-context"
+                  ? (target.clickEvidence?.captureValidation
+                      .rowIconMatchCount ?? 0)
+                  : ["form-control-name", "stable-attribute"].includes(
+                        candidate.strategy,
+                      )
+                    ? target.captureValidation.stableAttributeMatchCount
+                    : 1;
       return LocatorCandidateSchema.parse({
         ...candidate,
         matchCount,

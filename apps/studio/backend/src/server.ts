@@ -96,6 +96,47 @@ type WorkflowLibraryIndex = {
   entries: WorkflowLibraryEntry[];
 };
 
+function demonstratedEntryDocument(session: DemonstrationSession) {
+  const nodes = session.pageGraph.nodes;
+  let current = nodes.find(
+    (node) => node.id === session.actions[0]?.pageContextId,
+  );
+  const visited = new Set<string>();
+  while (current?.parentId && current.role !== "main") {
+    if (visited.has(current.id)) break;
+    visited.add(current.id);
+    current = nodes.find((candidate) => candidate.id === current?.parentId);
+  }
+  const demonstratedMain =
+    current?.role === "main" &&
+    current.origin !== "null" &&
+    current.origin !== "opaque:" &&
+    current.pathname !== "blank"
+      ? current
+      : undefined;
+  return (
+    demonstratedMain ??
+    [...nodes]
+      .reverse()
+      .find(
+        (node) =>
+          node.role === "main" && ["active", "open"].includes(node.status),
+      ) ??
+    nodes.find((node) => node.id === session.pageGraph.rootId)
+  );
+}
+
+function activeMainDocument(graph: DemonstrationSession["pageGraph"]) {
+  return (
+    [...graph.nodes]
+      .reverse()
+      .find(
+        (node) =>
+          node.role === "main" && ["active", "open"].includes(node.status),
+      ) ?? graph.nodes.find((node) => node.id === graph.rootId)
+  );
+}
+
 export type StudioControllerOptions = {
   targetUrl?: string;
   testMode?: boolean;
@@ -704,7 +745,7 @@ export class StudioController {
     let structurallyCompatible = false;
     if (available && this.browser.status().open) {
       const graph = this.browser.graph.data();
-      const root = graph.nodes.find((node) => node.id === graph.rootId);
+      const root = activeMainDocument(graph);
       structurallyCompatible = Boolean(
         root &&
           metadata &&
@@ -894,9 +935,7 @@ export class StudioController {
     const session = DemonstrationSessionSchema.parse(this.session);
     const values = LocalVariableValuesSchema.parse(this.localValues);
     assertNoLocalValuesInSession(session, values);
-    const root = session.pageGraph.nodes.find(
-      (node) => node.id === session.pageGraph.rootId,
-    );
+    const root = demonstratedEntryDocument(session);
     if (!root)
       throw new Error(
         "The completed demonstration has no compatible root structure.",
@@ -947,7 +986,7 @@ export class StudioController {
     const values = LocalVariableValuesSchema.parse(JSON.parse(valuesText));
     assertNoLocalValuesInSession(session, values);
     const graph = this.browser.graph.data();
-    const liveRoot = graph.nodes.find((node) => node.id === graph.rootId);
+    const liveRoot = activeMainDocument(graph);
     if (
       !liveRoot ||
       metadata.targetOrigin !== canonicalizeUrl(this.targetUrl).origin ||

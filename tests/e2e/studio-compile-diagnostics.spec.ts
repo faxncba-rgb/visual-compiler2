@@ -803,7 +803,7 @@ test("Stop teaching reconciles popup, rerender and history effects that arrive a
   });
 });
 
-test("a locator 422 exposes structural evidence and can be corrected and retried without re-teaching", async ({
+test("capture-time locator evidence is not invalidated by a later duplicate DOM node", async ({
   page,
 }) => {
   await withIsolatedStudio(async ({ controller, studioOrigin }) => {
@@ -836,55 +836,11 @@ test("a locator 422 exposes structural evidence and can be corrected and retried
     });
 
     await page.getByRole("button", { name: "Compile", exact: true }).click();
-    await expect(page.locator("#studioState")).toHaveText(
-      "DEMONSTRATION_REVIEW",
-    );
-    await expect(page.locator("#compilationDiagnostics")).toBeVisible();
-    await expect(page.locator("#diagnosticHttpStatus")).toHaveText("422");
-    await expect(page.locator("#diagnosticCompilerStage")).toHaveText(
-      "locator-validation",
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"recordedTargetFamily": "multiline-text"',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"total": 2',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"originalDomNodeReplaced": true',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"semanticEquivalentFound": true',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"stepId": "step-',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"actionIndex":',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"normalizedActionableAncestorFamily": "multiline-text"',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"semanticContainerMatchCount":',
-    );
-    await expect(page.locator("#diagnosticStructuralEvidence")).toContainText(
-      '"sameFormMatchCount":',
-    );
-    const retry = page.locator("#retryDiagnostic");
-    await expect(retry).toBeEnabled();
-    expect(controller.session?.id).toBe(sessionId);
-    expect(controller.session?.actions.length).toBe(demonstratedActionCount);
-    expect(controller.generalizationInstruction).toBe("");
-
-    await liveEditorFrame!
-      .locator("[data-vc-duplicate=true]")
-      .evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
-    await retry.click();
     await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
     await expect(page.locator("#compilationDiagnostics")).toBeHidden();
     expect(controller.session?.id).toBe(sessionId);
     expect(controller.session?.actions.length).toBe(demonstratedActionCount);
+    expect(controller.generalizationInstruction).toBe("");
     expect(controller.workflow?.compileMode).toBe("mock-ai-generalization");
   });
 });

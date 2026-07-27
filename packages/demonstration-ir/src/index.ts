@@ -145,10 +145,62 @@ export const DemonstratedTargetSchema = z.object({
       ancestorRole: z.string().optional(),
     })
     .default({ transient: false }),
+  clickEvidence: z
+    .object({
+      rawTarget: z.object({
+        tag: z.string(),
+        role: z.string().optional(),
+        alt: z.string().optional(),
+        title: z.string().optional(),
+        src: z.string().optional(),
+        structuralPath: z.string(),
+      }),
+      normalizedClickable: z.object({
+        tag: z.string(),
+        role: z.string().optional(),
+        accessibleName: z.string().optional(),
+        structuralPath: z.string(),
+      }),
+      icon: z
+        .object({
+          tag: z.string(),
+          alt: z.string().optional(),
+          title: z.string().optional(),
+          src: z.string().optional(),
+        })
+        .optional(),
+      canonicalHref: z.string().optional(),
+      onclick: z.string().optional(),
+      form: z
+        .object({
+          name: z.string().optional(),
+          id: z.string().optional(),
+          action: z.string().optional(),
+        })
+        .optional(),
+      table: z
+        .object({
+          rowIndex: z.number().int().nonnegative(),
+          columnIndex: z.number().int().nonnegative(),
+          headers: z.array(z.string()).max(12),
+          rowText: z.array(z.string()).max(12),
+        })
+        .optional(),
+      domRelations: z.array(z.string()).max(12),
+      structuralSnapshot: z.array(z.string()).max(32),
+      captureValidation: z.object({
+        canonicalHrefMatchCount: z.number().int().nonnegative(),
+        iconMatchCount: z.number().int().nonnegative(),
+        rowIconMatchCount: z.number().int().nonnegative(),
+      }),
+    })
+    .optional(),
 });
 
 export const RecordedPageContextSchema = z.object({
   id: z.string(),
+  pageId: z.string().optional(),
+  documentOrdinal: z.number().int().positive().default(1),
   role: z.enum(["main", "popup", "tab", "frame"]),
   parentId: z.string().optional(),
   openerActionId: z.string().optional(),
@@ -159,7 +211,7 @@ export const RecordedPageContextSchema = z.object({
   expectedLandmark: z.string().optional(),
   pageRole: z.string(),
   sameOriginInspectable: z.boolean().default(true),
-  status: z.enum(["open", "closed"]).default("open"),
+  status: z.enum(["active", "replaced", "closed", "open"]).default("active"),
 });
 
 export const PageContextGraphSchema = z.object({
@@ -169,7 +221,12 @@ export const PageContextGraphSchema = z.object({
     z.object({
       from: z.string(),
       to: z.string(),
-      relation: z.enum(["opened", "contains-frame", "focus-return"]),
+      relation: z.enum([
+        "opened",
+        "contains-frame",
+        "focus-return",
+        "navigated",
+      ]),
       actionId: z.string().optional(),
     }),
   ),
@@ -265,6 +322,13 @@ export const RecordedActionSchema = z.object({
     .optional(),
   key: z.string().optional(),
   keyboardScope: z.enum(["focused-element", "page"]).optional(),
+  selectionGesture: z
+    .object({
+      keys: z.array(z.string()).min(1),
+      nativeChangeObserved: z.boolean(),
+      replayKeyboardEvents: z.boolean(),
+    })
+    .optional(),
   dialog: z
     .object({
       type: z.enum(["alert", "confirm", "prompt", "beforeunload"]),
@@ -274,6 +338,7 @@ export const RecordedActionSchema = z.object({
     .optional(),
   observedEffects: z.array(ObservedEffectSchema),
   causedByActionId: z.string().optional(),
+  beforeState: z.lazy(() => StructuralSnapshotSchema).optional(),
   resultingState: z.lazy(() => StructuralSnapshotSchema).optional(),
   timestampOffsetMs: z.number().nonnegative(),
   optional: z.boolean().default(false),
@@ -298,6 +363,9 @@ export const StructuralSnapshotSchema = z.object({
   pageContextId: z.string(),
   fingerprint: z.string(),
   visibleLandmarks: z.array(z.string()),
+  origin: z.string().optional(),
+  pathname: z.string().optional(),
+  structuralOutline: z.array(z.string()).default([]),
   capturedAt: z.string().datetime(),
 });
 
@@ -392,6 +460,9 @@ export const LocatorStrategySchema = z.enum([
   "form-ownership",
   "neighbor-label",
   "same-row-column",
+  "canonical-href",
+  "icon-evidence",
+  "row-icon-context",
   "stable-attribute",
   "structural-fallback",
   "bounding-box",
@@ -412,6 +483,12 @@ export const LocatorRuleSchema = z.object({
   formName: z.string().optional(),
   tagName: z.string().optional(),
   staticText: z.string().optional(),
+  canonicalHref: z.string().optional(),
+  iconAlt: z.string().optional(),
+  iconTitle: z.string().optional(),
+  iconSrc: z.string().optional(),
+  rowText: z.string().optional(),
+  columnHeader: z.string().optional(),
   sequencePreviousActionId: z.string().optional(),
   controlFamily:
     DemonstratedTargetDescriptorSchema.shape.controlFamily.optional(),
@@ -501,6 +578,22 @@ export const CompiledStepSchema = z.object({
   postconditions: z.array(ConditionSchema),
   expectsPopupContextId: z.string().optional(),
   expectsPopupClosure: z.boolean().optional(),
+  semanticEnrichment: z
+    .object({
+      intention: z.string(),
+      semanticTarget: z.string(),
+      recommendedLocator: z
+        .object({
+          strategy: LocatorStrategySchema,
+          selectorPreview: z.string(),
+        })
+        .optional(),
+      postcondition: z.string().optional(),
+      confidence: z.number().min(0).max(1),
+    })
+    .optional(),
+  inferred: z.boolean().default(false),
+  evidenceRefs: z.array(z.string()).default([]),
 });
 
 export const LoopStopConditionSchema = z.discriminatedUnion("type", [
