@@ -342,9 +342,9 @@ export class DeterministicRuntime {
     await this.options.context.route("**/*", this.#networkHandler);
     await this.options.context.routeWebSocket(
       (url) => isOpenAIUrl(url.toString()),
-      async (webSocket) => {
+      (webSocket) => {
         this.#blockedOpenAIAttempts += 1;
-        await webSocket.close({
+        void webSocket.close({
           code: 1008,
           reason: "OpenAI WebSocket blocked by deterministic runtime policy.",
         });

@@ -73,9 +73,9 @@ export class ManagedBrowser {
     await context.route("**/*", (route) => this.#guardRoute(route));
     await context.routeWebSocket(
       (url) => isOpenAIUrl(url.toString()),
-      async (webSocket) => {
+      (webSocket) => {
         this.#blockedOpenAIAttempts += 1;
-        await webSocket.close({
+        void webSocket.close({
           code: 1008,
           reason: "OpenAI WebSocket blocked in deterministic runtime.",
         });
