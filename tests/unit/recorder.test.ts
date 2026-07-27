@@ -74,6 +74,28 @@ describe("high-level recorder", () => {
     expect(actions.map((entry) => entry.action)).toEqual(["click", "fill"]);
   });
 
+  it("never deduplicates ordered significant keyboard actions on the same focus owner", () => {
+    const actions = [
+      action({
+        id: "key-c",
+        action: "keyboard",
+        key: "c",
+        keyboardScope: "focused-element",
+      }),
+    ];
+    deduplicateAction(
+      actions,
+      action({
+        id: "key-enter",
+        action: "keyboard",
+        key: "Enter",
+        keyboardScope: "focused-element",
+        timestampOffsetMs: 120,
+      }),
+    );
+    expect(actions.map((entry) => entry.key)).toEqual(["c", "Enter"]);
+  });
+
   it("drops the duplicate change event emitted after a filled editor loses focus", () => {
     const fill = action({
       id: "fill-1",

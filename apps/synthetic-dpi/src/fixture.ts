@@ -376,3 +376,65 @@ export function renderInteractionControls() {
     });
   </script></body></html>`;
 }
+
+export function renderKeyboardValidationWorkflow() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Validation clavier synthétique</title>
+  <style>
+    ${baseStyles}
+    [hidden]{display:none!important}
+    [role=listbox],[role=dialog]{margin-top:12px;padding:12px;border:1px solid #8fa99c;border-radius:9px;background:#f8fbf9}
+    [role=listbox]:focus{outline:3px solid rgba(38,118,91,.24)}
+    [role=option][aria-selected=true]{font-weight:900;color:#185a45}
+  </style>
+  </head><body><div class="lab">LAB MODE — SYNTHETIC KEYBOARD WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Choix de consultation</h1></div>
+  <div class="record-grid"><section aria-labelledby="keyboard-heading">
+  <h2 id="keyboard-heading">Catégorie</h2>
+  <button type="button" data-open-picker>Choisir une catégorie</button>
+  <div role="listbox" aria-label="Catégories de consultation" tabindex="-1" hidden>
+    <div role="option" aria-selected="false" data-key="a">Administrative</div>
+    <div role="option" aria-selected="false" data-key="c">Consultation</div>
+  </div>
+  <div role="dialog" aria-labelledby="confirm-heading" hidden>
+    <h2 id="confirm-heading">Confirmer la catégorie</h2>
+    <button type="button" data-vc-action="validate-category">Valider</button>
+  </div>
+  <p class="status" role="status" data-vc-outcome="pending">Aucune catégorie validée.</p>
+  </section></div></article></main>
+  <script>
+    const opener = document.querySelector('[data-open-picker]');
+    const listbox = document.querySelector('[role=listbox]');
+    const dialog = document.querySelector('[role=dialog]');
+    const status = document.querySelector('[data-vc-outcome]');
+    let selectedKey = '';
+    opener.addEventListener('click', () => {
+      listbox.hidden = false;
+      listbox.focus();
+    });
+    listbox.addEventListener('keydown', event => {
+      if (event.key.length === 1) {
+        const key = event.key.toLocaleLowerCase();
+        const option = listbox.querySelector('[data-key="' + key + '"]');
+        if (!option) return;
+        event.preventDefault();
+        selectedKey = key;
+        for (const candidate of listbox.querySelectorAll('[role=option]')) {
+          candidate.setAttribute('aria-selected', String(candidate === option));
+        }
+        return;
+      }
+      if (event.key === 'Enter' && selectedKey === 'c') {
+        event.preventDefault();
+        listbox.hidden = true;
+        dialog.hidden = false;
+        dialog.querySelector('button').focus();
+      }
+    });
+    dialog.querySelector('button').addEventListener('click', () => {
+      dialog.hidden = true;
+      status.dataset.vcOutcome = 'success';
+      status.className = 'status success';
+      status.textContent = 'Catégorie Consultation validée.';
+    });
+  </script></body></html>`;
+}

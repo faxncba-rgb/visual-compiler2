@@ -755,6 +755,15 @@ export class DeterministicRuntime {
       await waitForAbortableTimeout(100, this.options.signal);
       return { message: "Deterministic wait completed." };
     }
+    if (step.action === "keyboard" && step.keyboardScope === "page") {
+      const root = await this.#resolveContext(step);
+      const page =
+        "mainFrame" in root ? (root as Page) : (root as Frame).page();
+      await page.keyboard.press(step.key ?? "Enter");
+      return {
+        message: `Executed page-level keyboard action ${step.key ?? "Enter"} without an element locator.`,
+      };
+    }
 
     const { locator, candidate } = await this.#resolveLocator(step);
     if (!locator || !candidate)

@@ -31,6 +31,7 @@ export type LocatorValidationEvidence = {
   };
   rejectionReasonsByStrategy: Array<{
     strategy: LocatorCandidate["strategy"];
+    selectorPreview: string;
     reasons: string[];
   }>;
   originalDomNodeReplaced: boolean;
@@ -562,7 +563,11 @@ export function selectDemonstratedLocator(
         reasons.push("recorded target is not compatible with this action");
       if (candidate.confidence < (options.confidenceThreshold ?? 0.7))
         reasons.push("confidence is below threshold");
-      return { strategy: candidate.strategy, reasons };
+      return {
+        strategy: candidate.strategy,
+        selectorPreview: candidate.selectorPreview,
+        reasons,
+      };
     });
     const maximum = (field: keyof LocatorCandidate) =>
       Math.max(

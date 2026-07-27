@@ -22,7 +22,21 @@ describe("zero-OpenAI runtime boundary", () => {
     ]);
     expect(source).not.toMatch(/from\s+["']openai["']/);
     expect(source).not.toMatch(/@openai\//);
+    expect(source).not.toContain("OPENAI_API_KEY");
     expect(JSON.parse(packageJson).dependencies?.openai).toBeUndefined();
+  });
+
+  it("loads the compile-only key from private local configuration and removes the process copy", async () => {
+    const [devScript, rootPackage, ignoreFile] = await Promise.all([
+      readFile(path.resolve("scripts/dev.ts"), "utf8"),
+      readFile(path.resolve("package.json"), "utf8"),
+      readFile(path.resolve(".gitignore"), "utf8"),
+    ]);
+    expect(devScript).toContain('path.resolve(process.cwd(), ".env.local")');
+    expect(devScript).toContain("(metadata.mode & 0o077) !== 0");
+    expect(devScript).toContain("delete process.env.OPENAI_API_KEY");
+    expect(ignoreFile).toContain(".env.*");
+    expect(JSON.parse(rootPackage).dependencies?.openai).toBeUndefined();
   });
 
   it("blocks HTTP and WebSocket OpenAI endpoints before network dispatch", () => {

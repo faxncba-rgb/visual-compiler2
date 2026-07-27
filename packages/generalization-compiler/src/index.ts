@@ -17,12 +17,12 @@ import {
 } from "../../locator-engine/src";
 import {
   assertNoLocalValuesInSession,
-  valuesForAiInstruction,
   type LocalVariableValues,
 } from "../../workflow-variables/src";
 import { createId, sha256 } from "../../shared/src";
 
-export const PROMPT_VERSION = "demonstration-generalization-v1";
+export const PROMPT_VERSION = "semantic-ir-gpt-5.6-v2";
+export const COMPILE_MODEL = "gpt-5.6";
 
 export type CompilationStage =
   | "demonstration-validation"
@@ -73,9 +73,18 @@ function compilationStageError(stage: CompilationStage, error: unknown) {
     : new CompilationStageError(stage, error);
 }
 
-export const AiGeneralizationOutputSchema = z.object({
+export const SemanticIrSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
   summary: z.string(),
   preserveDemonstratedTargets: z.literal(true),
+  actionPlan: z.array(
+    z.object({
+      ordinal: z.number().int().positive(),
+      actionId: z.string(),
+      action: z.string(),
+      intent: z.string(),
+    }),
+  ),
   loops: z.array(
     z.object({
       collectionDescription: z.string(),
@@ -95,6 +104,7 @@ export const AiGeneralizationOutputSchema = z.object({
   ),
 });
 
+export const AiGeneralizationOutputSchema = SemanticIrSchema;
 export type AiGeneralizationOutput = z.infer<
   typeof AiGeneralizationOutputSchema
 >;
@@ -110,12 +120,21 @@ export type AiPayload = {
       origin: string;
       pathname: string;
       parentId?: string;
+      openerActionId?: string;
       structuralFingerprint: string;
+      status: string;
+      sameOriginInspectable: boolean;
     }>;
     actions: Array<{
+      ordinal: number;
       id: string;
       action: string;
       pageContextId: string;
+      timestampOffsetMs: number;
+      keyboard?: {
+        key: string;
+        scope: "focused-element" | "page";
+      };
       target?: {
         tag: string;
         role?: string;
@@ -123,12 +142,49 @@ export type AiPayload = {
         associatedLabel?: string;
         semanticContainer?: string;
         fingerprint: string;
+        controlFamily?: string;
+        editable: boolean;
+        visibleAtCapture: boolean;
+        enabledAtCapture: boolean;
+        transientAtCapture: boolean;
+        transientAncestorRole?: string;
+        frame: {
+          role: string;
+          origin: string;
+          pathname: string;
+          name?: string;
+          title?: string;
+        };
+        stableAttributeNames: string[];
       };
       valueRef?: string;
       outputVariable?: string;
+      reactions: Array<{
+        type: string;
+        pageContextId?: string;
+        fingerprint?: string;
+        description: string;
+      }>;
+      resultingStateFingerprint?: string;
     }>;
   };
-  intentionalValues: Record<string, string>;
+  outcome: {
+    verification: string;
+    candidates: Array<{
+      type: string;
+      observed: boolean;
+      confidence: number;
+      target: string;
+    }>;
+    reconciliation?: {
+      status: string;
+      popupOpened: boolean;
+      popupClosed: boolean;
+      frameReplacementObserved: boolean;
+      pageContextReturned: boolean;
+      editorResetObserved: boolean;
+    };
+  };
   exclusions: {
     queryParameters: true;
     passwords: true;
@@ -140,22 +196,31 @@ export type AiPayload = {
 };
 
 export interface GeneralizationProvider {
-  readonly mode: "mock-ai-generalization";
+  readonly mode: "mock-ai-generalization" | "live-gpt-generalization";
+  readonly model: typeof COMPILE_MODEL;
   generalize(payload: AiPayload): Promise<unknown>;
 }
 
 export class MockGeneralizationProvider implements GeneralizationProvider {
   readonly mode = "mock-ai-generalization" as const;
+  readonly model = COMPILE_MODEL;
 
   async generalize(payload: AiPayload): Promise<unknown> {
     const repeat = /\b(repeat|each|following|chaque|suivant|rép[eé]t)/i.test(
       payload.instruction,
     );
     return {
+      schemaVersion: "1.0.0",
       summary: repeat
         ? "Mocked bounded iteration over the demonstrated repeated structure."
         : "Mocked semantic annotations preserving the literal demonstration.",
       preserveDemonstratedTargets: true,
+      actionPlan: payload.demonstration.actions.map((action) => ({
+        ordinal: action.ordinal,
+        actionId: action.id,
+        action: action.action,
+        intent: `Preserve demonstrated ${action.action} action ${action.ordinal}.`,
+      })),
       loops: repeat
         ? [
             {
@@ -185,9 +250,213 @@ export class MockGeneralizationProvider implements GeneralizationProvider {
   }
 }
 
+type FetchImplementation = (
+  input: string,
+  init?: RequestInit,
+) => Promise<Response>;
+
+const semanticIrJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schemaVersion",
+    "summary",
+    "preserveDemonstratedTargets",
+    "actionPlan",
+    "loops",
+  ],
+  properties: {
+    schemaVersion: { type: "string", const: "1.0.0" },
+    summary: { type: "string" },
+    preserveDemonstratedTargets: { type: "boolean", const: true },
+    actionPlan: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ordinal", "actionId", "action", "intent"],
+        properties: {
+          ordinal: { type: "integer", minimum: 1 },
+          actionId: { type: "string" },
+          action: { type: "string" },
+          intent: { type: "string" },
+        },
+      },
+    },
+    loops: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "collectionDescription",
+          "templateActionIds",
+          "templateRowFingerprint",
+          "nextItemRelationship",
+          "eligibilityPredicate",
+          "maximumIterations",
+          "maximumDurationMs",
+          "duplicateItemProtection",
+          "errorPolicy",
+        ],
+        properties: {
+          collectionDescription: { type: "string" },
+          templateActionIds: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+          templateRowFingerprint: { type: "string" },
+          nextItemRelationship: {
+            type: "string",
+            enum: ["next-sibling", "next-row", "next-matching-container"],
+          },
+          eligibilityPredicate: { type: "string" },
+          maximumIterations: {
+            type: "integer",
+            minimum: 1,
+            maximum: 1000,
+          },
+          maximumDurationMs: {
+            type: "integer",
+            minimum: 1000,
+            maximum: 3_600_000,
+          },
+          duplicateItemProtection: { type: "boolean", const: true },
+          errorPolicy: {
+            type: "string",
+            enum: ["stop-first-required-failure", "continue-optional"],
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+function responseOutputText(response: unknown) {
+  if (!response || typeof response !== "object") return undefined;
+  const direct = (response as { output_text?: unknown }).output_text;
+  if (typeof direct === "string") return direct;
+  const output = (response as { output?: unknown }).output;
+  if (!Array.isArray(output)) return undefined;
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (
+        part &&
+        typeof part === "object" &&
+        (part as { type?: unknown }).type === "output_text" &&
+        typeof (part as { text?: unknown }).text === "string"
+      )
+        return (part as { text: string }).text;
+    }
+  }
+  return undefined;
+}
+
+export class OpenAiCompileProvider implements GeneralizationProvider {
+  readonly mode = "live-gpt-generalization" as const;
+  readonly model = COMPILE_MODEL;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly fetchImplementation: FetchImplementation = fetch,
+  ) {
+    if (!apiKey.trim())
+      throw new Error("GPT-5.6 compile-time API configuration is empty.");
+  }
+
+  async generalize(payload: AiPayload): Promise<unknown> {
+    const response = await this.fetchImplementation(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.model,
+          store: false,
+          reasoning: { effort: "medium" },
+          input: [
+            {
+              role: "developer",
+              content:
+                "Compile the redacted browser demonstration into Semantic IR. Preserve every demonstrated action ID and order exactly. Never invent or replace targets. Return only the requested schema.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify(payload),
+            },
+          ],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "visual_compiler_semantic_ir",
+              strict: true,
+              schema: semanticIrJsonSchema,
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(60_000),
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        `GPT-5.6 compile-time request failed with HTTP ${response.status}.`,
+      );
+    const outputText = responseOutputText(await response.json());
+    if (!outputText)
+      throw new Error(
+        "GPT-5.6 compile-time response did not contain structured output.",
+      );
+    try {
+      return JSON.parse(outputText) as unknown;
+    } catch {
+      throw new Error(
+        "GPT-5.6 compile-time response contained invalid structured JSON.",
+      );
+    }
+  }
+}
+
+function validateSemanticIr(rawOutput: unknown, session: DemonstrationSession) {
+  const output = SemanticIrSchema.parse(rawOutput);
+  const expected = session.actions.map((action, index) => ({
+    ordinal: action.sequence ?? index + 1,
+    actionId: action.id,
+    action: action.action,
+  }));
+  const actual = output.actionPlan.map((action) => ({
+    ordinal: action.ordinal,
+    actionId: action.actionId,
+    action: action.action,
+  }));
+  if (JSON.stringify(actual) !== JSON.stringify(expected))
+    throw new Error(
+      "GPT-5.6 Semantic IR did not preserve the demonstrated action IDs, types and order.",
+    );
+  return output;
+}
+
 function redactStructuralText(value: string | undefined) {
   if (!value) return undefined;
   return value
+    .replaceAll(/https?:\/\/[^\s]+/gi, (match) => {
+      try {
+        const url = new URL(match);
+        return `${url.origin}${url.pathname}`;
+      } catch {
+        return "[REDACTED_URL]";
+      }
+    })
+    .replaceAll(
+      /\b(?:password|passcode|token|secret|cookie|authorization|bearer|api[-_ ]?key)\s*[:=]\s*\S+/gi,
+      "[REDACTED_SECRET]",
+    )
     .replaceAll(
       /\b(?:patient|dossier|record)\s*[:#-]?\s*[a-z0-9_-]+/gi,
       "[REDACTED_IDENTIFIER]",
@@ -204,7 +473,7 @@ export function buildAiPayload(
   assertNoLocalValuesInSession(session, values);
   return {
     promptVersion: PROMPT_VERSION,
-    instruction,
+    instruction: redactStructuralText(instruction) ?? "",
     demonstration: {
       id: session.id,
       pages: session.pages.map((page) => ({
@@ -213,12 +482,25 @@ export function buildAiPayload(
         origin: page.origin,
         pathname: page.pathname,
         ...(page.parentId ? { parentId: page.parentId } : {}),
+        ...(page.openerActionId ? { openerActionId: page.openerActionId } : {}),
         structuralFingerprint: page.structuralFingerprint,
+        status: page.status,
+        sameOriginInspectable: page.sameOriginInspectable,
       })),
-      actions: session.actions.map((action) => ({
+      actions: session.actions.map((action, index) => ({
+        ordinal: action.sequence ?? index + 1,
         id: action.id,
         action: action.action,
         pageContextId: action.pageContextId,
+        timestampOffsetMs: action.timestampOffsetMs,
+        ...(action.action === "keyboard" && action.key
+          ? {
+              keyboard: {
+                key: action.key,
+                scope: action.keyboardScope ?? "focused-element",
+              },
+            }
+          : {}),
         ...(action.target
           ? {
               target: {
@@ -246,6 +528,35 @@ export function buildAiPayload(
                     }
                   : {}),
                 fingerprint: action.target.fingerprint,
+                ...(action.target.descriptor?.controlFamily
+                  ? {
+                      controlFamily: action.target.descriptor.controlFamily,
+                    }
+                  : {}),
+                editable: action.target.editable,
+                visibleAtCapture: action.target.visible,
+                enabledAtCapture: action.target.enabled,
+                transientAtCapture: action.target.captureContext.transient,
+                ...(action.target.captureContext.ancestorRole
+                  ? {
+                      transientAncestorRole:
+                        action.target.captureContext.ancestorRole,
+                    }
+                  : {}),
+                frame: {
+                  role: action.target.frame.role,
+                  origin: action.target.frame.origin,
+                  pathname: action.target.frame.pathname,
+                  ...(action.target.frame.name
+                    ? { name: action.target.frame.name }
+                    : {}),
+                  ...(action.target.frame.title
+                    ? { title: action.target.frame.title }
+                    : {}),
+                },
+                stableAttributeNames: Object.keys(
+                  action.target.stableAttributes,
+                ),
               },
             }
           : {}),
@@ -253,9 +564,47 @@ export function buildAiPayload(
         ...(action.outputVariable
           ? { outputVariable: action.outputVariable }
           : {}),
+        reactions: action.observedEffects.map((effect) => ({
+          type: effect.type,
+          ...(effect.pageContextId
+            ? { pageContextId: effect.pageContextId }
+            : {}),
+          ...(effect.fingerprint ? { fingerprint: effect.fingerprint } : {}),
+          description:
+            redactStructuralText(effect.description) ??
+            "Redacted demonstrated reaction.",
+        })),
+        ...(action.resultingState?.fingerprint
+          ? {
+              resultingStateFingerprint: action.resultingState.fingerprint,
+            }
+          : {}),
       })),
     },
-    intentionalValues: valuesForAiInstruction(session.variables, values),
+    outcome: {
+      verification: session.outcomeVerification,
+      candidates: session.outcomeCandidates.map((candidate) => ({
+        type: candidate.type,
+        observed: candidate.observed,
+        confidence: candidate.confidence,
+        target: redactStructuralText(candidate.target) ?? "[REDACTED_TARGET]",
+      })),
+      ...(session.effectReconciliation
+        ? {
+            reconciliation: {
+              status: session.effectReconciliation.status,
+              popupOpened: session.effectReconciliation.popupOpened,
+              popupClosed: session.effectReconciliation.popupClosed,
+              frameReplacementObserved:
+                session.effectReconciliation.frameReplacementObserved,
+              pageContextReturned:
+                session.effectReconciliation.pageContextReturned,
+              editorResetObserved:
+                session.effectReconciliation.editorResetObserved,
+            },
+          }
+        : {}),
+    },
     exclusions: {
       queryParameters: true,
       passwords: true,
@@ -492,16 +841,24 @@ async function compileSteps(
           pathname: action.target.frame.pathname,
         },
       );
-      const useCapturedTarget = !liveResolution.root;
+      const liveCandidates = liveResolution.root
+        ? await validateLocatorCandidates(
+            liveResolution.root,
+            action.target,
+            generatedCandidates,
+          )
+        : [];
+      const noLongerVisibleAfterDemonstratedReaction =
+        action.target.visible &&
+        liveCandidates.length > 0 &&
+        liveCandidates.every((candidate) => candidate.visibleCount === 0);
+      const useCapturedTarget =
+        !liveResolution.root ||
+        action.target.captureContext.transient ||
+        noLongerVisibleAfterDemonstratedReaction;
       candidates = useCapturedTarget
         ? validateCapturedLocatorCandidates(action.target, generatedCandidates)
-        : liveResolution.root
-          ? await validateLocatorCandidates(
-              liveResolution.root,
-              action.target,
-              generatedCandidates,
-            )
-          : [];
+        : liveCandidates;
       const selected = selectDemonstratedLocator(candidates, {
         requireEditable: ["fill", "select"].includes(action.action),
         target: action.target,
@@ -580,6 +937,7 @@ async function compileSteps(
         ? { inputStrategies: [...inputStrategiesFor(action)!] }
         : {}),
       ...(action.key ? { key: action.key } : {}),
+      ...(action.keyboardScope ? { keyboardScope: action.keyboardScope } : {}),
       optional: action.optional,
       preconditions,
       postconditions,
@@ -744,6 +1102,14 @@ function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
       lines.push(`  await ${generatedLocator(selected)}.check();`);
     } else if (step.action === "uncheck" && selected) {
       lines.push(`  await ${generatedLocator(selected)}.uncheck();`);
+    } else if (step.action === "keyboard" && selected) {
+      lines.push(
+        `  await ${generatedLocator(selected)}.press(${JSON.stringify(step.key ?? "Enter")});`,
+      );
+    } else if (step.action === "keyboard" && step.keyboardScope === "page") {
+      lines.push(
+        `  await page.keyboard.press(${JSON.stringify(step.key ?? "Enter")});`,
+      );
     } else {
       lines.push(`  // ${step.action}: ${step.name}`);
     }
@@ -765,10 +1131,10 @@ export async function compileDemonstration({
   graph,
   localValues,
   generalizationInstruction = "",
-  provider = new MockGeneralizationProvider(),
+  provider,
 }: CompileOptions): Promise<{
   workflow: CompiledWorkflow;
-  aiPayload?: AiPayload;
+  aiPayload: AiPayload;
 }> {
   let session: DemonstrationSession;
   try {
@@ -776,7 +1142,8 @@ export async function compileDemonstration({
     assertNoLocalValuesInSession(session, localValues);
     const hasExecutableAction = session.actions.some(
       (action) =>
-        Boolean(action.target) &&
+        (Boolean(action.target) ||
+          (action.action === "keyboard" && action.keyboardScope === "page")) &&
         [
           "click",
           "double-click",
@@ -797,17 +1164,20 @@ export async function compileDemonstration({
     throw compilationStageError("demonstration-validation", error);
   }
   const instruction = generalizationInstruction.trim();
-  let aiPayload: AiPayload | undefined;
-  let aiOutput: AiGeneralizationOutput | undefined;
-  if (instruction) {
-    try {
-      aiPayload = buildAiPayload(session, instruction, localValues);
-      aiOutput = AiGeneralizationOutputSchema.parse(
-        await provider.generalize(aiPayload),
+  let aiPayload: AiPayload;
+  let aiOutput: AiGeneralizationOutput;
+  try {
+    if (!provider)
+      throw new Error(
+        "GPT-5.6 compilation is unavailable. Configure OPENAI_API_KEY in the local ignored environment file.",
       );
-    } catch (error) {
-      throw compilationStageError("generalization", error);
-    }
+    aiPayload = buildAiPayload(session, instruction, localValues);
+    aiOutput = validateSemanticIr(
+      await provider.generalize(aiPayload),
+      session,
+    );
+  } catch (error) {
+    throw compilationStageError("generalization", error);
   }
   let steps: CompiledStep[];
   try {
@@ -822,9 +1192,7 @@ export async function compileDemonstration({
     throw compilationStageError("application-outcome-validation", error);
   }
   const workflowId = createId("workflow");
-  const compileMode = instruction
-    ? "mock-ai-generalization"
-    : "direct-demonstration";
+  const compileMode = provider.mode;
   let workflow: CompiledWorkflow;
   try {
     workflow = CompiledWorkflowSchema.parse({
@@ -850,20 +1218,21 @@ export async function compileDemonstration({
       expectedOutcome,
       compilationMetadata: {
         compiledAt: new Date().toISOString(),
-        ...(instruction
-          ? { promptVersion: PROMPT_VERSION, model: "mock-gpt-5.6" }
-          : {}),
-        modelCalls: 0,
-        ...(aiPayload
-          ? { payloadSha256: sha256(JSON.stringify(aiPayload)) }
-          : {}),
+        promptVersion: PROMPT_VERSION,
+        model: provider.model,
+        modelCalls: 1,
+        payloadSha256: sha256(JSON.stringify(aiPayload)),
         diagnostics: [
           {
             level: "info",
-            code: instruction ? "MOCK_AI_ONLY" : "DIRECT_COMPILATION",
-            message: instruction
-              ? "Structured AI generalization was produced by a mock; no live model call occurred."
-              : "The literal demonstration compiled locally without GPT.",
+            code:
+              provider.mode === "live-gpt-generalization"
+                ? "GPT_COMPILE_TIME"
+                : "MOCK_GPT_COMPILE_TIME",
+            message:
+              provider.mode === "live-gpt-generalization"
+                ? "Validated Semantic IR was produced once by GPT-5.6 at compile time."
+                : "Validated Semantic IR was produced once by the automated GPT-5.6 test mock.",
           },
         ],
         generatedPlaywright: generatePlaywright(workflowId, steps),
@@ -872,5 +1241,5 @@ export async function compileDemonstration({
   } catch (error) {
     throw compilationStageError("artifact-validation", error);
   }
-  return { workflow, ...(aiPayload ? { aiPayload } : {}) };
+  return { workflow, aiPayload };
 }

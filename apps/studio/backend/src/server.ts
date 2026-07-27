@@ -21,8 +21,11 @@ import {
   buildAiPayload,
   compileDemonstration,
   CompilationStageError,
+  MockGeneralizationProvider,
+  OpenAiCompileProvider,
   type ApplicationOutcomeValidationEvidence,
   type CompilationStage,
+  type GeneralizationProvider,
 } from "../../../../packages/generalization-compiler/src";
 import {
   DeterministicRuntime,
@@ -96,6 +99,8 @@ type WorkflowLibraryIndex = {
 export type StudioControllerOptions = {
   targetUrl?: string;
   testMode?: boolean;
+  compileApiKey?: string;
+  compileProvider?: GeneralizationProvider;
 };
 
 export function resolveConfiguredTarget(options: StudioControllerOptions = {}) {
@@ -255,6 +260,7 @@ export class StudioController {
   readonly workflowLibraryEntries: WorkflowLibraryEntry[] = [];
   readonly testMode: boolean;
   readonly targetUrl: string;
+  readonly compileProvider: GeneralizationProvider | undefined;
   #abortController: AbortController | undefined;
   #mutation: "compile" | "run" | undefined;
   #workflowLibraryLoaded = false;
@@ -275,8 +281,21 @@ export class StudioController {
     const configured = resolveConfiguredTarget(options);
     this.testMode = configured.testMode;
     this.targetUrl = configured.targetUrl;
+    this.compileProvider =
+      options.compileProvider ??
+      (this.testMode
+        ? new MockGeneralizationProvider()
+        : options.compileApiKey
+          ? new OpenAiCompileProvider(options.compileApiKey)
+          : undefined);
     this.browser = new ManagedBrowser({
-      profileDirectory: path.join(rootDirectory, ".local", "browser-profile"),
+      profileDirectory: path.join(
+        rootDirectory,
+        ".local",
+        this.testMode
+          ? `browser-profile-test-${process.pid}`
+          : "browser-profile",
+      ),
       headless: process.env.VC_HEADLESS === "1",
       slowMo: 0,
     });
@@ -752,7 +771,16 @@ export class StudioController {
         animatedRunOptional: true,
         localRunDefaultInLab: true,
         sameRuntimeEngine: true,
-        liveGptEnabled: false,
+        aiCompilationAvailable: Boolean(this.compileProvider),
+        aiCompilationProvider:
+          this.compileProvider?.mode === "live-gpt-generalization"
+            ? "openai"
+            : this.compileProvider
+              ? "mock"
+              : "unavailable",
+        compileTimeModel: "gpt-5.6",
+        liveGptEnabled:
+          this.compileProvider?.mode === "live-gpt-generalization",
       },
     };
   }
@@ -1027,6 +1055,7 @@ export class StudioController {
       );
     if (!this.session) throw new Error("No demonstration is available.");
     this.#mutation = "compile";
+    this.compilationDiagnostic = undefined;
     this.machine.transition("COMPILING");
     const previousWorkflow = this.workflow;
     const previousAiPayload = this.aiPayload;
@@ -1035,12 +1064,20 @@ export class StudioController {
       this.generalizationInstruction =
         typeof instruction === "string" ? instruction.trim() : "";
       this.workflowName = this.#normalizeWorkflowName(workflowName);
+      if (!this.compileProvider)
+        throw new CompilationStageError(
+          "generalization",
+          new Error(
+            "GPT-5.6 compilation is unavailable. Configure OPENAI_API_KEY in the local ignored environment file.",
+          ),
+        );
       stage = "locator-validation";
       const result = await compileDemonstration({
         session: this.session,
         graph: this.browser.graph,
         localValues: this.localValues,
         generalizationInstruction: this.generalizationInstruction,
+        provider: this.compileProvider,
       });
       this.workflow = result.workflow;
       this.aiPayload = result.aiPayload;
@@ -1084,6 +1121,10 @@ export class StudioController {
       this.generalizationInstruction,
     ];
     const structuralEvidence = findLocatorValidationEvidence(error);
+    const structuralAction =
+      structuralEvidence && structuralEvidence.actionIndex >= 0
+        ? this.session?.actions[structuralEvidence.actionIndex]
+        : undefined;
     const applicationOutcomeEvidence =
       findApplicationOutcomeValidationEvidence(error);
     const failedTelemetryStep = this.telemetry?.steps.find(
@@ -1112,17 +1153,25 @@ export class StudioController {
       serverMessage: safeTelemetryMessage(error, sensitiveValues),
       ...(structuralEvidence ? { structuralEvidence } : {}),
       ...(applicationOutcomeEvidence ? { applicationOutcomeEvidence } : {}),
-      ...(failedTelemetryStep ? { stepId: failedTelemetryStep.stepId } : {}),
+      ...(failedTelemetryStep
+        ? { stepId: failedTelemetryStep.stepId }
+        : structuralEvidence
+          ? { stepId: structuralEvidence.stepId }
+          : {}),
       ...(failedTelemetryStep
         ? { actionType: failedTelemetryStep.action }
-        : {}),
-      ...(compiledStep?.target
+        : structuralAction
+          ? { actionType: structuralAction.action }
+          : {}),
+      ...((compiledStep?.target ?? structuralAction?.target)
         ? {
             targetSummary: [
-              compiledStep.target.role,
-              compiledStep.target.accessibleName,
-              compiledStep.target.associatedLabel,
-              compiledStep.target.tag,
+              (compiledStep?.target ?? structuralAction?.target)?.role,
+              (compiledStep?.target ?? structuralAction?.target)
+                ?.accessibleName,
+              (compiledStep?.target ?? structuralAction?.target)
+                ?.associatedLabel,
+              (compiledStep?.target ?? structuralAction?.target)?.tag,
             ]
               .filter(Boolean)
               .join(" · "),
@@ -1130,10 +1179,20 @@ export class StudioController {
         : {}),
       ...(selectedLocator
         ? { selectedLocator: selectedLocator.selectorPreview }
-        : {}),
+        : structuralEvidence?.rejectionReasonsByStrategy[0]
+          ? {
+              selectedLocator: `Rejected ${structuralEvidence.rejectionReasonsByStrategy[0].strategy}: ${structuralEvidence.rejectionReasonsByStrategy[0].selectorPreview}`,
+            }
+          : {}),
       ...(failedTelemetryStep
         ? { observedReactionSummary: failedTelemetryStep.message }
-        : {}),
+        : structuralAction?.observedEffects.length
+          ? {
+              observedReactionSummary: structuralAction.observedEffects
+                .map((effect) => effect.type)
+                .join(", "),
+            }
+          : {}),
       ...(this.#teachingTrace
         ? { teachingTraceId: this.#teachingTrace.id }
         : {}),

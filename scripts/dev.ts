@@ -1,3 +1,5 @@
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { startStudioServer } from "../apps/studio/backend/src/server";
 import { startSyntheticDpiServer } from "../apps/synthetic-dpi/src/server";
 
@@ -10,13 +12,52 @@ const testTargetUrl =
   process.env.VISUAL_COMPILER_TEST_TARGET_URL ??
   `http://${fixtureHost}:${fixturePort}/fixture?variant=A`;
 
+async function loadCompileApiKey() {
+  const filename = path.resolve(process.cwd(), ".env.local");
+  try {
+    const metadata = await stat(filename);
+    if ((metadata.mode & 0o077) !== 0)
+      throw new Error(
+        ".env.local must be readable and writable only by its owner (0600).",
+      );
+    const contents = await readFile(filename, "utf8");
+    const assignment = contents
+      .split(/\r?\n/)
+      .find((line) => line.trimStart().startsWith("OPENAI_API_KEY="));
+    if (!assignment) return undefined;
+    const rawValue = assignment.slice(assignment.indexOf("=") + 1).trim();
+    const value =
+      (rawValue.startsWith('"') && rawValue.endsWith('"')) ||
+      (rawValue.startsWith("'") && rawValue.endsWith("'"))
+        ? rawValue.slice(1, -1)
+        : rawValue;
+    return value || undefined;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ENOENT"
+    )
+      return undefined;
+    throw error;
+  }
+}
+
+const compileApiKey = testMode ? undefined : await loadCompileApiKey();
+delete process.env.OPENAI_API_KEY;
+
 const fixture = testMode
   ? await startSyntheticDpiServer(fixturePort, fixtureHost)
   : undefined;
 const { server: studio, controller } = await startStudioServer(
   studioPort,
   studioHost,
-  testMode ? { testMode: true, targetUrl: testTargetUrl } : {},
+  testMode
+    ? { testMode: true, targetUrl: testTargetUrl }
+    : compileApiKey
+      ? { compileApiKey }
+      : {},
 );
 
 console.log(`Visual Compiler 2 Studio: http://${studioHost}:${studioPort}`);

@@ -329,6 +329,15 @@ function executableActionCount(session) {
   );
 }
 
+function compileModeLabel() {
+  const capabilities = state?.capabilities;
+  if (!capabilities?.aiCompilationAvailable)
+    return "GPT-5.6 compilation unavailable — configure OPENAI_API_KEY in .env.local";
+  if (capabilities.aiCompilationProvider === "mock")
+    return "GPT-5.6 compile-time mock ready — automated tests only";
+  return "GPT-5.6 compile-time compilation ready";
+}
+
 function renderButtons() {
   const current = state?.state ?? "IDLE";
   const active = ["RECORDING", "COMPILING", "RUNNING"].includes(current);
@@ -364,6 +373,7 @@ function renderButtons() {
   $("#compile").disabled =
     current !== "DEMONSTRATION_REVIEW" ||
     executableActionCount(state?.session) === 0 ||
+    !state?.capabilities?.aiCompilationAvailable ||
     requestInFlight;
   $("#compile").textContent = "Compile";
   $("#localRun").disabled = !state?.workflow || !runnable || requestInFlight;
@@ -387,12 +397,12 @@ function render() {
     ? "RECORDING"
     : "OFF";
   $("#compilerStatus").textContent = state.workflow
-    ? state.workflow.compileMode === "direct-demonstration"
-      ? "LOCAL"
-      : "GENERALIZED"
+    ? "SEMANTIC IR"
     : state.state === "COMPILING"
       ? "COMPILING"
-      : "WAITING";
+      : state.capabilities?.aiCompilationAvailable
+        ? "WAITING"
+        : "UNAVAILABLE";
   $("#runtimeStatus").textContent = state.telemetry?.state ?? "READY";
   $("#runtimeLlmCalls").textContent = state.metrics.runtimeLlmCalls;
   $("#runtimeOpenAiRequests").textContent = state.metrics.runtimeOpenAIRequests;
@@ -420,9 +430,7 @@ function render() {
   $("#demonstrationSummary").textContent = state.session
     ? `${executable} executable action${executable === 1 ? "" : "s"} · outcome ${verification}`
     : "Stop teaching to prepare a demonstration.";
-  $("#compileMode").textContent = $("#generalizationInstruction").value.trim()
-    ? "Mocked generalization — no live AI call"
-    : "Direct local compilation — no AI call";
+  $("#compileMode").textContent = compileModeLabel();
   $("#runtimeState").textContent = state.telemetry
     ? `${state.telemetry.state} · ${state.telemetry.mode} · ${state.telemetry.steps.length} steps`
     : state.workflow
@@ -507,7 +515,7 @@ async function compileWorkflow() {
       },
     });
     render();
-    toast("Local artifact compiled and ready to run.");
+    toast("GPT-5.6 Semantic IR compiled; local artifact ready to run.");
   } catch (error) {
     adoptDiagnostic(error);
     await refresh();
@@ -616,10 +624,7 @@ $("#retryDiagnostic").addEventListener("click", () => {
   }
 });
 $("#generalizationInstruction").addEventListener("input", () => {
-  $("#compileMode").textContent =
-    $("#generalizationInstruction").value.trim().length > 0
-      ? "Mocked generalization — no live AI call"
-      : "Direct local compilation — no AI call";
+  $("#compileMode").textContent = compileModeLabel();
 });
 
 await refresh();

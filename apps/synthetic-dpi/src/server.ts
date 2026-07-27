@@ -7,6 +7,7 @@ import {
   renderEditorFrame,
   renderFixture,
   renderInteractionControls,
+  renderKeyboardValidationWorkflow,
   renderPopupAction,
   renderPopupWorkflow,
   renderValidationPopup,
@@ -48,6 +49,8 @@ export function createSyntheticDpiServer() {
       return html(response, renderDialogWorkflow());
     if (url.pathname === "/fixture/controls")
       return html(response, renderInteractionControls());
+    if (url.pathname === "/fixture/keyboard-validation")
+      return html(response, renderKeyboardValidationWorkflow());
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("Synthetic fixture not found");
   });

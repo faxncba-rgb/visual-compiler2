@@ -70,6 +70,9 @@ export function target(
       labelMatchCount: 1,
       stableAttributeMatchCount: 1,
     },
+    captureContext: {
+      transient: false,
+    },
     ...overrides,
   };
 }

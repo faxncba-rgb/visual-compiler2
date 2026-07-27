@@ -91,7 +91,9 @@ export type CapturedBrowserEvent = {
     selectionObserved: boolean;
   };
   key?: string;
+  keyboardScope?: "focused-element" | "page";
   applicationStateBeforeAction?: RawApplicationState;
+  captureSequence?: number;
   occurredAt: number;
 };
 
@@ -340,6 +342,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
   globalThis.__vc2RecorderInstalled = true;
   let activeEdit;
   let editSequence = 0;
+  let captureSequence = 0;
   const text = value => String(value || '').replace(/\\s+/g, ' ').trim();
   const staticInterfaceText = value => {
     const normalized = text(value).slice(0, 120);
@@ -515,6 +518,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
     const targetName = accessibleName(element);
     const targetLabel = label(element);
     const stableProbe = element.getAttribute('data-vc-field') || element.getAttribute('data-vc-action') || element.getAttribute('name');
+    const transientAncestor = element.closest('[role=menu],[role=listbox],[role=dialog],dialog,[popover]');
     return {
       fingerprint: hash(signature),
       tag: element.tagName.toLowerCase(),
@@ -560,11 +564,22 @@ const RECORDER_INIT_SCRIPT = `(() => {
           node.getAttribute('data-vc-action') === stableProbe ||
           node.getAttribute('name') === stableProbe
         ).length : 0
+      },
+      captureContext: {
+        transient: Boolean(transientAncestor),
+        ancestorRole: transientAncestor ? (role(transientAncestor) || transientAncestor.tagName.toLowerCase()) : undefined
       }
     };
   };
   const send = payload => {
-    try { void globalThis.__vc2Record(payload); } catch {}
+    try {
+      return Promise.resolve(globalThis.__vc2Record({
+        ...payload,
+        captureSequence: ++captureSequence
+      })).catch(() => undefined);
+    } catch {
+      return Promise.resolve();
+    }
   };
   const isEditable = element => element instanceof Element && (
     element.matches('input:not([type=hidden]):not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]),textarea,select,[contenteditable=true],[role=textbox]') ||
@@ -603,7 +618,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
     const value = String(edit.value ?? '');
     if (phase === 'update' && edit.lastPublishedValue === value) return;
     edit.lastPublishedValue = value;
-    send({
+    return send({
       kind: edit.element instanceof HTMLSelectElement ? 'select' : 'fill',
       target: edit.target,
       value,
@@ -625,8 +640,9 @@ const RECORDER_INIT_SCRIPT = `(() => {
     if (activeEdit.element?.isConnected) {
       activeEdit.value = String(editableValue(activeEdit.element));
     }
-    publishEdit(phase);
+    const published = publishEdit(phase);
     if (phase === 'commit') activeEdit = undefined;
+    return published;
   }
   const updateEdit = (element, details = {}) => {
     const edit = openEdit(element);
@@ -719,11 +735,21 @@ const RECORDER_INIT_SCRIPT = `(() => {
       event.altKey ? 'Alt' : '',
       event.shiftKey ? 'Shift' : ''
     ].filter(Boolean);
-    const meaningful = ['Enter','Escape','Tab','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key);
+    const focused = document.activeElement instanceof Element ? document.activeElement : undefined;
+    const pageScoped = !focused || focused === document.body || focused === document.documentElement;
+    const focusOwner = pageScoped ? undefined : (actionableAncestor(focused) || focused);
+    const significantCharacter = event.key.length === 1 && !isEditable(focusOwner);
+    const meaningful = significantCharacter || ['Enter','Escape','Tab','ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key);
     if (!meaningful && modifiers.length === 0) return;
-    const info = target(event.target);
+    const info = focusOwner ? target(focusOwner, event.target) : undefined;
     const key = [...modifiers, event.key].join('+');
-    if (!info?.password && !info?.forbiddenValue) send({ kind: 'keyboard', target: info, key, occurredAt: Date.now() });
+    if (!info?.password && !info?.forbiddenValue) send({
+      kind: 'keyboard',
+      target: info,
+      keyboardScope: info ? 'focused-element' : 'page',
+      key,
+      occurredAt: Date.now()
+    });
   }, true);
   document.addEventListener('keyup', event => {
     if (activeEdit?.element === event.target && activeEdit.target.editorAdapter === 'keyboard') {
@@ -897,6 +923,7 @@ export function deduplicateAction(
   }
   if (
     previous &&
+    candidate.action !== "keyboard" &&
     previous.action === candidate.action &&
     previous.pageContextId === candidate.pageContextId &&
     previous.target?.fingerprint === candidate.target?.fingerprint &&
@@ -948,6 +975,7 @@ export class DemonstrationRecorder {
   #session: MutableSession | undefined;
   #startedAtMs = 0;
   #nextSequence = 1;
+  readonly #pendingBrowserEvents = new Set<Promise<void>>();
   #localValues = new Map<string, string>();
   #editingActions = new Map<string, RecordedAction>();
   #lastRuntimeVariableName: string | undefined;
@@ -997,12 +1025,18 @@ export class DemonstrationRecorder {
     await this.context.exposeBinding(
       "__vc2Record",
       async (source, payload: CapturedBrowserEvent) => {
+        const handle = this.#handleBrowserEvent(source.frame, payload).catch(
+          (error) => {
+            this.#bindingErrors.push(
+              error instanceof Error ? error.message : String(error),
+            );
+          },
+        );
+        this.#pendingBrowserEvents.add(handle);
         try {
-          await this.#handleBrowserEvent(source.frame, payload);
-        } catch (error) {
-          this.#bindingErrors.push(
-            error instanceof Error ? error.message : String(error),
-          );
+          await handle;
+        } finally {
+          this.#pendingBrowserEvents.delete(handle);
         }
       },
     );
@@ -1056,6 +1090,7 @@ export class DemonstrationRecorder {
     const graph = this.graph.data();
     this.#startedAtMs = now.getTime();
     this.#nextSequence = 1;
+    this.#pendingBrowserEvents.clear();
     this.#localValues.clear();
     this.#editingActions.clear();
     this.#lastRuntimeVariableName = undefined;
@@ -1130,6 +1165,8 @@ export class DemonstrationRecorder {
             .catch(() => undefined),
         ),
     );
+    while (this.#pendingBrowserEvents.size > 0)
+      await Promise.all([...this.#pendingBrowserEvents]);
     const stability = await this.#waitForDomStability();
     this.#active = false;
     this.#unwireDialogs();
@@ -1138,7 +1175,10 @@ export class DemonstrationRecorder {
     this.#session.pages = this.#session.pageGraph.nodes;
     this.#session.afterState = await this.#snapshot();
     this.#session.actions.sort(
-      (left, right) => left.timestampOffsetMs - right.timestampOffsetMs,
+      (left, right) =>
+        left.timestampOffsetMs - right.timestampOffsetMs ||
+        (left.captureSequence ?? left.sequence ?? 0) -
+          (right.captureSequence ?? right.sequence ?? 0),
     );
     this.#session.actions.forEach((action, index) => {
       action.sequence = index + 1;
@@ -1803,6 +1843,9 @@ export class DemonstrationRecorder {
     const recorded = RecordedActionSchema.parse({
       id: createId("action"),
       sequence: this.#nextSequence++,
+      ...(payload.captureSequence
+        ? { captureSequence: payload.captureSequence }
+        : {}),
       pageContextId,
       action: payload.kind,
       name: `${pageLabel(graphNode?.role ?? "main")} — ${actionLabel(payload.kind, payload.target)}`,
@@ -1824,6 +1867,9 @@ export class DemonstrationRecorder {
           }
         : {}),
       ...(payload.key ? { key: payload.key } : {}),
+      ...(payload.keyboardScope
+        ? { keyboardScope: payload.keyboardScope }
+        : {}),
       observedEffects: [],
       timestampOffsetMs: Math.max(0, payload.occurredAt - this.#startedAtMs),
       optional: false,

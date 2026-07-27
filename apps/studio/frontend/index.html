@@ -181,10 +181,10 @@
             </p>
           </div>
           <details id="optionalAiDetails" class="optional-ai">
-            <summary>Optional AI generalization</summary>
+            <summary>GPT-5.6 compile-time instructions (optional)</summary>
             <p>
-              Leave empty for direct local compilation. Development uses no live
-              model.
+              Compile calls GPT-5.6 once to produce validated Semantic IR.
+              Instructions may be left empty. Run locally never calls AI.
             </p>
             <label for="generalizationInstruction">Instruction</label>
             <textarea
@@ -194,7 +194,7 @@
           </details>
           <div class="compile-row">
             <span id="compileMode" class="mode-pill">
-              Direct local compilation — no AI call
+              Checking GPT-5.6 compile-time availability…
             </span>
             <button id="compile" class="primary">Compile</button>
           </div>

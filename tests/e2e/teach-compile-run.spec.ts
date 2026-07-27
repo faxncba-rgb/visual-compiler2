@@ -12,7 +12,7 @@ import {
 } from "./helpers";
 
 test.describe("required demonstration-first consultation workflow", () => {
-  test("records the exact editor, compiles directly, runs on layout B, and runs again", async () => {
+  test("records the exact editor, compiles Semantic IR once, runs on layout B, and runs again", async () => {
     await withManagedBrowser(
       `${fixtureOrigin}/fixture?variant=A`,
       async ({ browser, page, recorder }) => {
@@ -84,8 +84,9 @@ test.describe("required demonstration-first consultation workflow", () => {
           session,
           values,
         });
-        expect(workflow.compileMode).toBe("direct-demonstration");
-        expect(workflow.compilationMetadata.modelCalls).toBe(0);
+        expect(workflow.compileMode).toBe("mock-ai-generalization");
+        expect(workflow.compilationMetadata.model).toBe("gpt-5.6");
+        expect(workflow.compilationMetadata.modelCalls).toBe(1);
         const fillStep = workflow.steps.find((step) => step.action === "fill");
         expect(fillStep?.target?.associatedLabel).toBe("Texte de consultation");
         expect(fillStep?.locatorCandidates[0]?.rule).toMatchObject({
@@ -106,7 +107,7 @@ test.describe("required demonstration-first consultation workflow", () => {
             "Repeat the demonstrated actions on each following eligible row.",
         });
         expect(generalized.compileMode).toBe("mock-ai-generalization");
-        expect(generalized.compilationMetadata.modelCalls).toBe(0);
+        expect(generalized.compilationMetadata.modelCalls).toBe(1);
         expect(generalized.loops[0]).toMatchObject({
           maximumIterations: 100,
           maximumDurationMs: 600_000,

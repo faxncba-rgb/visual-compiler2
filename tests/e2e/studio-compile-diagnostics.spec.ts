@@ -30,6 +30,7 @@ async function withIsolatedStudio(
     rootDirectory: string;
     studioOrigin: string;
   }) => Promise<void>,
+  targetPath = "/fixture?variant=A",
 ) {
   const rootDirectory = await mkdtemp(
     path.join(os.tmpdir(), "visual-compiler-2-studio-e2e-"),
@@ -38,7 +39,7 @@ async function withIsolatedStudio(
   process.env.VC_HEADLESS = "1";
   const controller = new StudioController(rootDirectory, {
     testMode: true,
-    targetUrl: `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture?variant=A`,
+    targetUrl: `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}${targetPath}`,
   });
   const server = createStudioServer(controller);
   try {
@@ -53,6 +54,118 @@ async function withIsolatedStudio(
     await rm(rootDirectory, { recursive: true, force: true });
   }
 }
+
+test("Studio clearly reports unavailable GPT compilation when no key is configured", async ({
+  page,
+}) => {
+  const rootDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "visual-compiler-2-no-key-e2e-"),
+  );
+  const controller = new StudioController(rootDirectory, {
+    testMode: false,
+    targetUrl: "https://example.invalid/",
+  });
+  const server = createStudioServer(controller);
+  try {
+    const studioOrigin = await listenOnEphemeralPort(server);
+    await page.goto(studioOrigin);
+    await expect(page.locator("#compileMode")).toHaveText(
+      "GPT-5.6 compilation unavailable — configure OPENAI_API_KEY in .env.local",
+    );
+    await expect(
+      page.getByRole("button", { name: "Compile", exact: true }),
+    ).toBeDisabled();
+    expect(controller.browser.status().open).toBe(false);
+  } finally {
+    await closeStudioServer(server, controller);
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
+});
+
+test("Studio compiles and replays click → c → Enter → Valider through mocked GPT-5.6", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await page.goto(studioOrigin);
+    const initialLibrarySize = controller.workflowLibraryEntries.length;
+    await page
+      .getByRole("button", { name: "Start teaching", exact: true })
+      .click();
+    const managedPage = controller.browser.mainPage;
+    await managedPage
+      .getByRole("button", {
+        name: "Choisir une catégorie",
+        exact: true,
+      })
+      .click();
+    const listbox = managedPage.getByRole("listbox", {
+      name: "Catégories de consultation",
+      exact: true,
+    });
+    await listbox.press("c");
+    await listbox.press("Enter");
+    await managedPage
+      .getByRole("button", { name: "Valider", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Stop teaching", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "DEMONSTRATION_REVIEW",
+    );
+
+    const demonstrated = controller.session?.actions.filter((action) =>
+      ["click", "keyboard"].includes(action.action),
+    );
+    expect(
+      demonstrated?.map((action) =>
+        action.action === "keyboard"
+          ? `${action.action}:${action.key}`
+          : `${action.action}:${action.target?.accessibleName}`,
+      ),
+    ).toEqual([
+      "click:Choisir une catégorie",
+      "keyboard:c",
+      "keyboard:Enter",
+      "click:Valider",
+    ]);
+    await expect(page.locator("#generalizationInstruction")).toHaveValue("");
+    await page.getByRole("button", { name: "Compile", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+    await expect(page.locator("#compilationDiagnostics")).toBeHidden();
+    expect(controller.workflow).toMatchObject({
+      compileMode: "mock-ai-generalization",
+      compilationMetadata: {
+        model: "gpt-5.6",
+        modelCalls: 1,
+      },
+    });
+    expect(
+      controller.workflow?.steps
+        .filter((step) => step.action === "keyboard")
+        .map((step) => step.key),
+    ).toEqual(["c", "Enter"]);
+
+    await controller.browser.navigate(
+      `http://127.0.0.1:${process.env.VC_FIXTURE_PORT ?? "4273"}/fixture/keyboard-validation`,
+    );
+    await page
+      .getByRole("button", { name: "Run locally", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText("PASSED");
+    expect(controller.telemetry).toMatchObject({
+      llmCalls: 0,
+      openAIRequests: 0,
+    });
+    await page.getByRole("button", { name: "Run again", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("PASSED");
+    expect(controller.telemetry).toMatchObject({
+      llmCalls: 0,
+      openAIRequests: 0,
+    });
+    expect(controller.workflowLibraryEntries).toHaveLength(initialLibrarySize);
+  }, "/fixture/keyboard-validation");
+});
 
 async function closeStudioServer(server: Server, controller: StudioController) {
   await controller.browser.close().catch(() => undefined);
@@ -195,11 +308,12 @@ test("Legacy DPI layout A survives same-path editor rerender, compiles and runs 
 
     await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
     await expect(page.locator("#toast")).toHaveText(
-      "Local artifact compiled and ready to run.",
+      "GPT-5.6 Semantic IR compiled; local artifact ready to run.",
     );
     await expect(page.locator("#toast")).not.toHaveClass(/error/);
     await expect(page.locator("#compilationDiagnostics")).toBeHidden();
-    expect(controller.workflow?.compileMode).toBe("direct-demonstration");
+    expect(controller.workflow?.compileMode).toBe("mock-ai-generalization");
+    expect(controller.workflow?.compilationMetadata.modelCalls).toBe(1);
     expect(controller.workflow?.expectedOutcome).toMatchObject({
       verification: "VERIFIED",
       requireAllPositive: true,
@@ -765,7 +879,7 @@ test("a locator 422 exposes structural evidence and can be corrected and retried
     await expect(page.locator("#compilationDiagnostics")).toBeHidden();
     expect(controller.session?.id).toBe(sessionId);
     expect(controller.session?.actions.length).toBe(demonstratedActionCount);
-    expect(controller.workflow?.compileMode).toBe("direct-demonstration");
+    expect(controller.workflow?.compileMode).toBe("mock-ai-generalization");
   });
 });
 

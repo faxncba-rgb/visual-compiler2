@@ -70,6 +70,30 @@ test("test mode opens the configured local target automatically with recording o
   ).toBeVisible();
 });
 
+test("Studio panel text is mouse-selectable and copyable with the standard shortcut", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: new URL(page.url()).origin,
+  });
+  await page.locator("#advancedDetails > summary").click();
+  await page.getByText("Demonstration IR", { exact: true }).click();
+  const panel = page.locator("#demonstrationJson");
+  await expect(panel).toBeVisible();
+  expect(
+    await panel.evaluate((element) => getComputedStyle(element).userSelect),
+  ).toBe("text");
+  await panel.click({ clickCount: 3 });
+  expect(
+    await page.evaluate(() => globalThis.getSelection()?.toString() ?? ""),
+  ).toContain("No demonstration recorded");
+  await page.keyboard.press("Meta+c");
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toContain("No demonstration recorded");
+});
+
 test("production configuration defaults to the DPI home without contacting it", () => {
   const previous = process.env.VISUAL_COMPILER_TARGET_URL;
   delete process.env.VISUAL_COMPILER_TARGET_URL;

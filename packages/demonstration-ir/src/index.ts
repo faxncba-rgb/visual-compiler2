@@ -139,6 +139,12 @@ export const DemonstratedTargetSchema = z.object({
     labelMatchCount: z.number().int().nonnegative(),
     stableAttributeMatchCount: z.number().int().nonnegative(),
   }),
+  captureContext: z
+    .object({
+      transient: z.boolean(),
+      ancestorRole: z.string().optional(),
+    })
+    .default({ transient: false }),
 });
 
 export const RecordedPageContextSchema = z.object({
@@ -235,6 +241,7 @@ export const WorkflowActionValueSchema = z.discriminatedUnion("kind", [
 export const RecordedActionSchema = z.object({
   id: z.string(),
   sequence: z.number().int().positive().optional(),
+  captureSequence: z.number().int().positive().optional(),
   pageContextId: z.string(),
   action: RecordedActionTypeSchema,
   name: z.string(),
@@ -257,6 +264,7 @@ export const RecordedActionSchema = z.object({
     })
     .optional(),
   key: z.string().optional(),
+  keyboardScope: z.enum(["focused-element", "page"]).optional(),
   dialog: z
     .object({
       type: z.enum(["alert", "confirm", "prompt", "beforeunload"]),
@@ -487,6 +495,7 @@ export const CompiledStepSchema = z.object({
     .min(1)
     .optional(),
   key: z.string().optional(),
+  keyboardScope: z.enum(["focused-element", "page"]).optional(),
   optional: z.boolean(),
   preconditions: z.array(ConditionSchema),
   postconditions: z.array(ConditionSchema),

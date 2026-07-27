@@ -4,7 +4,10 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { ManagedBrowser } from "../../packages/managed-browser/src";
 import { DemonstrationRecorder } from "../../packages/demonstration-recorder/src";
-import { compileDemonstration } from "../../packages/generalization-compiler/src";
+import {
+  compileDemonstration,
+  MockGeneralizationProvider,
+} from "../../packages/generalization-compiler/src";
 import type {
   CompiledWorkflow,
   DemonstrationSession,
@@ -106,6 +109,7 @@ export async function compilePrimary(details: {
     graph: details.browser.graph,
     localValues: details.values,
     generalizationInstruction: details.instruction ?? "",
+    provider: new MockGeneralizationProvider(),
   });
   return result.workflow;
 }
