@@ -8,6 +8,9 @@ import {
   renderFixture,
   renderInteractionControls,
   renderKeyboardValidationWorkflow,
+  renderMultiDocumentCoding,
+  renderMultiDocumentConsultations,
+  renderMultiDocumentStays,
   renderPopupAction,
   renderPopupWorkflow,
   renderValidationPopup,
@@ -51,6 +54,12 @@ export function createSyntheticDpiServer() {
       return html(response, renderInteractionControls());
     if (url.pathname === "/fixture/keyboard-validation")
       return html(response, renderKeyboardValidationWorkflow());
+    if (url.pathname === "/fixture/multidoc/consultations.cgi")
+      return html(response, renderMultiDocumentConsultations());
+    if (url.pathname === "/fixture/multidoc/sejours.cgi")
+      return html(response, renderMultiDocumentStays());
+    if (url.pathname === "/fixture/multidoc/codage_etage.cgi")
+      return html(response, renderMultiDocumentCoding());
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("Synthetic fixture not found");
   });

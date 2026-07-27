@@ -39,7 +39,7 @@ describe("strict AI generalization boundary", () => {
       maximumDurationMs: 600_000,
       duplicateItemProtection: true,
     });
-    expect(result.actionPlan.map((action) => action.actionId)).toEqual(
+    expect(result.enrichments.map((action) => action.sourceActionId)).toEqual(
       payload.demonstration.actions.map((action) => action.id),
     );
   });
@@ -47,10 +47,17 @@ describe("strict AI generalization boundary", () => {
   it("rejects invalid model output and target substitution", () => {
     expect(() =>
       AiGeneralizationOutputSchema.parse({
-        schemaVersion: "1.0.0",
+        schemaVersion: "2.0.0",
         summary: "unsafe",
-        preserveDemonstratedTargets: false,
-        actionPlan: [],
+        enrichments: [
+          {
+            sourceActionId: "invented",
+            intention: "replace",
+            semanticTarget: "different",
+            confidence: 2,
+          },
+        ],
+        inferredActions: [],
         loops: [],
       }),
     ).toThrow();

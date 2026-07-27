@@ -2,11 +2,13 @@ import { z } from "zod";
 import {
   CompiledWorkflowSchema,
   DemonstrationSessionSchema,
+  LocatorStrategySchema,
   type ApplicationOutcome,
   type CompiledLoop,
   type CompiledStep,
   type CompiledWorkflow,
   type DemonstrationSession,
+  type LocatorCandidate,
 } from "../../demonstration-ir/src";
 import type { PageContextGraph } from "../../page-context-graph/src";
 import {
@@ -21,7 +23,7 @@ import {
 } from "../../workflow-variables/src";
 import { createId, sha256 } from "../../shared/src";
 
-export const PROMPT_VERSION = "semantic-ir-gpt-5.6-v2";
+export const PROMPT_VERSION = "semantic-enrichment-gpt-5.6-v3";
 export const COMPILE_MODEL = "gpt-5.6";
 
 export type CompilationStage =
@@ -74,15 +76,36 @@ function compilationStageError(stage: CompilationStage, error: unknown) {
 }
 
 export const SemanticIrSchema = z.object({
-  schemaVersion: z.literal("1.0.0"),
+  schemaVersion: z.literal("2.0.0"),
   summary: z.string(),
-  preserveDemonstratedTargets: z.literal(true),
-  actionPlan: z.array(
+  enrichments: z.array(
     z.object({
-      ordinal: z.number().int().positive(),
-      actionId: z.string(),
-      action: z.string(),
-      intent: z.string(),
+      sourceActionId: z.string(),
+      intention: z.string(),
+      semanticTarget: z.string(),
+      recommendedLocator: z
+        .object({
+          strategy: LocatorStrategySchema,
+          selectorPreview: z.string(),
+        })
+        .nullable(),
+      postcondition: z.string().nullable(),
+      confidence: z.number().min(0).max(1),
+    }),
+  ),
+  inferredActions: z.array(
+    z.object({
+      action: z.enum(["wait", "assert", "navigation", "focus"]),
+      name: z.string(),
+      position: z.object({
+        relativeToSourceActionId: z.string(),
+        placement: z.enum(["before", "after"]),
+      }),
+      pageContextId: z.string().nullable(),
+      evidenceRefs: z.array(z.string()).min(1),
+      confidence: z.number().min(0).max(1),
+      justification: z.string(),
+      asPostcondition: z.boolean().default(false),
     }),
   ),
   loops: z.array(
@@ -116,6 +139,8 @@ export type AiPayload = {
     id: string;
     pages: Array<{
       id: string;
+      pageId?: string;
+      documentOrdinal: number;
       role: string;
       origin: string;
       pathname: string;
@@ -156,6 +181,26 @@ export type AiPayload = {
           title?: string;
         };
         stableAttributeNames: string[];
+        clickEvidence?: {
+          rawTag: string;
+          normalizedTag: string;
+          iconAlt?: string;
+          iconTitle?: string;
+          iconSrc?: string;
+          canonicalHref?: string;
+          onclick?: string;
+          formName?: string;
+          rowIndex?: number;
+          columnIndex?: number;
+          headers: string[];
+          rowText: string[];
+          domRelations: string[];
+          structuralSnapshot: string[];
+        };
+        locatorCandidates: Array<{
+          strategy: LocatorCandidate["strategy"];
+          selectorPreview: string;
+        }>;
       };
       valueRef?: string;
       outputVariable?: string;
@@ -166,6 +211,8 @@ export type AiPayload = {
         description: string;
       }>;
       resultingStateFingerprint?: string;
+      beforeStateFingerprint?: string;
+      forensicSelectionKeys?: string[];
     }>;
   };
   outcome: {
@@ -210,17 +257,23 @@ export class MockGeneralizationProvider implements GeneralizationProvider {
       payload.instruction,
     );
     return {
-      schemaVersion: "1.0.0",
+      schemaVersion: "2.0.0",
       summary: repeat
         ? "Mocked bounded iteration over the demonstrated repeated structure."
         : "Mocked semantic annotations preserving the literal demonstration.",
-      preserveDemonstratedTargets: true,
-      actionPlan: payload.demonstration.actions.map((action) => ({
-        ordinal: action.ordinal,
-        actionId: action.id,
-        action: action.action,
-        intent: `Preserve demonstrated ${action.action} action ${action.ordinal}.`,
+      enrichments: payload.demonstration.actions.map((action) => ({
+        sourceActionId: action.id,
+        intention: `Interpret demonstrated ${action.action} action ${action.ordinal}.`,
+        semanticTarget:
+          action.target?.accessibleName ??
+          action.target?.associatedLabel ??
+          action.target?.clickEvidence?.iconAlt ??
+          "Demonstrated page state",
+        recommendedLocator: action.target?.locatorCandidates[0] ?? null,
+        postcondition: action.reactions[0]?.description ?? null,
+        confidence: 0.96,
       })),
+      inferredActions: [],
       loops: repeat
         ? [
             {
@@ -261,25 +314,95 @@ const semanticIrJsonSchema = {
   required: [
     "schemaVersion",
     "summary",
-    "preserveDemonstratedTargets",
-    "actionPlan",
+    "enrichments",
+    "inferredActions",
     "loops",
   ],
   properties: {
-    schemaVersion: { type: "string", const: "1.0.0" },
+    schemaVersion: { type: "string", const: "2.0.0" },
     summary: { type: "string" },
-    preserveDemonstratedTargets: { type: "boolean", const: true },
-    actionPlan: {
+    enrichments: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["ordinal", "actionId", "action", "intent"],
+        required: [
+          "sourceActionId",
+          "intention",
+          "semanticTarget",
+          "recommendedLocator",
+          "postcondition",
+          "confidence",
+        ],
         properties: {
-          ordinal: { type: "integer", minimum: 1 },
-          actionId: { type: "string" },
-          action: { type: "string" },
-          intent: { type: "string" },
+          sourceActionId: { type: "string" },
+          intention: { type: "string" },
+          semanticTarget: { type: "string" },
+          recommendedLocator: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                required: ["strategy", "selectorPreview"],
+                properties: {
+                  strategy: {
+                    type: "string",
+                    enum: LocatorStrategySchema.options,
+                  },
+                  selectorPreview: { type: "string" },
+                },
+              },
+              { type: "null" },
+            ],
+          },
+          postcondition: {
+            anyOf: [{ type: "string" }, { type: "null" }],
+          },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+        },
+      },
+    },
+    inferredActions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "action",
+          "name",
+          "position",
+          "pageContextId",
+          "evidenceRefs",
+          "confidence",
+          "justification",
+          "asPostcondition",
+        ],
+        properties: {
+          action: {
+            type: "string",
+            enum: ["wait", "assert", "navigation", "focus"],
+          },
+          name: { type: "string" },
+          position: {
+            type: "object",
+            additionalProperties: false,
+            required: ["relativeToSourceActionId", "placement"],
+            properties: {
+              relativeToSourceActionId: { type: "string" },
+              placement: { type: "string", enum: ["before", "after"] },
+            },
+          },
+          pageContextId: {
+            anyOf: [{ type: "string" }, { type: "null" }],
+          },
+          evidenceRefs: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          justification: { type: "string" },
+          asPostcondition: { type: "boolean" },
         },
       },
     },
@@ -385,7 +508,7 @@ export class OpenAiCompileProvider implements GeneralizationProvider {
             {
               role: "developer",
               content:
-                "Compile the redacted browser demonstration into Semantic IR. Preserve every demonstrated action ID and order exactly. Never invent or replace targets. Return only the requested schema.",
+                "Enrich the immutable redacted browser actions by sourceActionId. Do not regenerate action IDs, action types, or ordering. Recommend semantic locators from the supplied capture-time candidates. Put genuinely inferred behavior only in inferredActions with evidence references, insertion position, and confidence. A reactive navigation may be expressed as a postcondition. Return only the requested schema.",
             },
             {
               role: "user",
@@ -425,20 +548,46 @@ export class OpenAiCompileProvider implements GeneralizationProvider {
 
 function validateSemanticIr(rawOutput: unknown, session: DemonstrationSession) {
   const output = SemanticIrSchema.parse(rawOutput);
-  const expected = session.actions.map((action, index) => ({
-    ordinal: action.sequence ?? index + 1,
-    actionId: action.id,
-    action: action.action,
-  }));
-  const actual = output.actionPlan.map((action) => ({
-    ordinal: action.ordinal,
-    actionId: action.actionId,
-    action: action.action,
-  }));
-  if (JSON.stringify(actual) !== JSON.stringify(expected))
-    throw new Error(
-      "GPT-5.6 Semantic IR did not preserve the demonstrated action IDs, types and order.",
-    );
+  const actionIds = new Set(session.actions.map((action) => action.id));
+  const enrichmentIds = new Set<string>();
+  for (const enrichment of output.enrichments) {
+    if (!actionIds.has(enrichment.sourceActionId))
+      throw new Error(
+        "GPT-5.6 enrichment referenced an unknown sourceActionId.",
+      );
+    if (enrichmentIds.has(enrichment.sourceActionId))
+      throw new Error("GPT-5.6 enrichment duplicated a sourceActionId.");
+    enrichmentIds.add(enrichment.sourceActionId);
+  }
+  for (const inferred of output.inferredActions) {
+    if (!actionIds.has(inferred.position.relativeToSourceActionId))
+      throw new Error(
+        "GPT-5.6 inferred action referenced an unknown insertion sourceActionId.",
+      );
+    if (
+      inferred.pageContextId &&
+      !session.pages.some((page) => page.id === inferred.pageContextId)
+    )
+      throw new Error(
+        "GPT-5.6 inferred action referenced an unknown document context.",
+      );
+    if (
+      inferred.evidenceRefs.some(
+        (reference) =>
+          !actionIds.has(reference) &&
+          !session.actions.some((action) =>
+            action.observedEffects.some(
+              (effect) =>
+                effect.fingerprint === reference ||
+                effect.pageContextId === reference,
+            ),
+          ),
+      )
+    )
+      throw new Error(
+        "GPT-5.6 inferred action lacked demonstrated evidence references.",
+      );
+  }
   return output;
 }
 
@@ -478,6 +627,8 @@ export function buildAiPayload(
       id: session.id,
       pages: session.pages.map((page) => ({
         id: page.id,
+        ...(page.pageId ? { pageId: page.pageId } : {}),
+        documentOrdinal: page.documentOrdinal,
         role: page.role,
         origin: page.origin,
         pathname: page.pathname,
@@ -557,6 +708,82 @@ export function buildAiPayload(
                 stableAttributeNames: Object.keys(
                   action.target.stableAttributes,
                 ),
+                ...(action.target.clickEvidence
+                  ? {
+                      clickEvidence: {
+                        rawTag: action.target.clickEvidence.rawTarget.tag,
+                        normalizedTag:
+                          action.target.clickEvidence.normalizedClickable.tag,
+                        ...(action.target.clickEvidence.icon?.alt
+                          ? {
+                              iconAlt: redactStructuralText(
+                                action.target.clickEvidence.icon.alt,
+                              )!,
+                            }
+                          : {}),
+                        ...(action.target.clickEvidence.icon?.title
+                          ? {
+                              iconTitle: redactStructuralText(
+                                action.target.clickEvidence.icon.title,
+                              )!,
+                            }
+                          : {}),
+                        ...(action.target.clickEvidence.icon?.src
+                          ? {
+                              iconSrc: action.target.clickEvidence.icon.src,
+                            }
+                          : {}),
+                        ...(action.target.clickEvidence.canonicalHref
+                          ? {
+                              canonicalHref:
+                                action.target.clickEvidence.canonicalHref,
+                            }
+                          : {}),
+                        ...(action.target.clickEvidence.onclick
+                          ? {
+                              onclick: redactStructuralText(
+                                action.target.clickEvidence.onclick,
+                              )!,
+                            }
+                          : {}),
+                        ...(action.target.clickEvidence.form?.name
+                          ? {
+                              formName: redactStructuralText(
+                                action.target.clickEvidence.form.name,
+                              )!,
+                            }
+                          : {}),
+                        ...(action.target.clickEvidence.table
+                          ? {
+                              rowIndex:
+                                action.target.clickEvidence.table.rowIndex,
+                              columnIndex:
+                                action.target.clickEvidence.table.columnIndex,
+                              headers: action.target.clickEvidence.table.headers
+                                .map(redactStructuralText)
+                                .filter((entry): entry is string =>
+                                  Boolean(entry),
+                                ),
+                              rowText: action.target.clickEvidence.table.rowText
+                                .map(redactStructuralText)
+                                .filter((entry): entry is string =>
+                                  Boolean(entry),
+                                ),
+                            }
+                          : { headers: [], rowText: [] }),
+                        domRelations: action.target.clickEvidence.domRelations,
+                        structuralSnapshot:
+                          action.target.clickEvidence.structuralSnapshot,
+                      },
+                    }
+                  : {}),
+                locatorCandidates: generateLocatorCandidates(
+                  action.target,
+                  action.sequenceContext,
+                ).map((candidate) => ({
+                  strategy: candidate.strategy,
+                  selectorPreview: candidate.selectorPreview,
+                })),
               },
             }
           : {}),
@@ -577,6 +804,16 @@ export function buildAiPayload(
         ...(action.resultingState?.fingerprint
           ? {
               resultingStateFingerprint: action.resultingState.fingerprint,
+            }
+          : {}),
+        ...(action.beforeState?.fingerprint
+          ? {
+              beforeStateFingerprint: action.beforeState.fingerprint,
+            }
+          : {}),
+        ...(action.selectionGesture
+          ? {
+              forensicSelectionKeys: action.selectionGesture.keys,
             }
           : {}),
       })),
@@ -814,6 +1051,7 @@ async function compileSteps(
   session: DemonstrationSession,
   graph: PageContextGraph,
   values: LocalVariableValues,
+  aiOutput: AiGeneralizationOutput,
 ) {
   const steps: CompiledStep[] = [];
   for (
@@ -826,6 +1064,9 @@ async function compileSteps(
     const hasExecutableTarget = Boolean(action.target);
     let candidates: Awaited<ReturnType<typeof validateLocatorCandidates>> = [];
     let selectedLocatorId: string | undefined;
+    const enrichment = aiOutput.enrichments.find(
+      (candidate) => candidate.sourceActionId === action.id,
+    );
     if (action.target) {
       const generatedCandidates = generateLocatorCandidates(
         action.target,
@@ -841,25 +1082,20 @@ async function compileSteps(
           pathname: action.target.frame.pathname,
         },
       );
-      const liveCandidates = liveResolution.root
-        ? await validateLocatorCandidates(
-            liveResolution.root,
-            action.target,
-            generatedCandidates,
+      candidates = validateCapturedLocatorCandidates(
+        action.target,
+        generatedCandidates,
+      );
+      const recommended = enrichment?.recommendedLocator
+        ? candidates.find(
+            (candidate) =>
+              candidate.strategy === enrichment.recommendedLocator?.strategy &&
+              candidate.selectorPreview ===
+                enrichment.recommendedLocator.selectorPreview,
           )
-        : [];
-      const noLongerVisibleAfterDemonstratedReaction =
-        action.target.visible &&
-        liveCandidates.length > 0 &&
-        liveCandidates.every((candidate) => candidate.visibleCount === 0);
-      const useCapturedTarget =
-        !liveResolution.root ||
-        action.target.captureContext.transient ||
-        noLongerVisibleAfterDemonstratedReaction;
-      candidates = useCapturedTarget
-        ? validateCapturedLocatorCandidates(action.target, generatedCandidates)
-        : liveCandidates;
-      const selected = selectDemonstratedLocator(candidates, {
+        : undefined;
+      const selectionPool = recommended ? [recommended] : candidates;
+      const selected = selectDemonstratedLocator(selectionPool, {
         requireEditable: ["fill", "select"].includes(action.action),
         target: action.target,
         action: action.action,
@@ -902,7 +1138,7 @@ async function compileSteps(
             : []),
         ]
       : [];
-    const postconditions =
+    const postconditions: CompiledStep["postconditions"] =
       action.action === "fill" && action.target?.backingFieldSelector
         ? [
             {
@@ -913,6 +1149,23 @@ async function compileSteps(
             },
           ]
         : [];
+    for (const effect of action.observedEffects) {
+      if (effect.type !== "navigation" || !effect.pageContextId) continue;
+      const navigatedDocument = session.pages.find(
+        (page) => page.id === effect.pageContextId,
+      );
+      if (!navigatedDocument) continue;
+      if (
+        action.beforeState?.origin === navigatedDocument.origin &&
+        action.beforeState?.pathname === navigatedDocument.pathname
+      )
+        continue;
+      postconditions.push({
+        type: "url-path",
+        expected: navigatedDocument.pathname,
+        description: `The demonstrated action navigates to ${navigatedDocument.pathname}.`,
+      });
+    }
     steps.push({
       id: stepId,
       sourceActionId: action.id,
@@ -941,6 +1194,25 @@ async function compileSteps(
       optional: action.optional,
       preconditions,
       postconditions,
+      ...(enrichment
+        ? {
+            semanticEnrichment: {
+              intention: enrichment.intention,
+              semanticTarget: enrichment.semanticTarget,
+              ...(enrichment.recommendedLocator
+                ? {
+                    recommendedLocator: enrichment.recommendedLocator,
+                  }
+                : {}),
+              ...(enrichment.postcondition
+                ? { postcondition: enrichment.postcondition }
+                : {}),
+              confidence: enrichment.confidence,
+            },
+          }
+        : {}),
+      inferred: false,
+      evidenceRefs: [],
     });
   }
   for (let index = 0; index < steps.length; index += 1) {
@@ -971,6 +1243,68 @@ async function compileSteps(
       previous.expectsPopupClosure = true;
   }
   return steps;
+}
+
+function mergeInferredActions(
+  output: AiGeneralizationOutput,
+  steps: CompiledStep[],
+  session: DemonstrationSession,
+) {
+  const merged = [...steps];
+  for (const [inferredIndex, inferred] of output.inferredActions.entries()) {
+    const anchorIndex = merged.findIndex(
+      (step) =>
+        !step.inferred &&
+        step.sourceActionId === inferred.position.relativeToSourceActionId,
+    );
+    if (anchorIndex < 0)
+      throw new Error(
+        "Inferred action insertion point does not exist in the immutable local actions.",
+      );
+    const anchor = merged[anchorIndex]!;
+    const pageContextId = inferred.pageContextId ?? anchor.pageContextId;
+    const pageContext = session.pages.find(
+      (candidate) => candidate.id === pageContextId,
+    );
+    if (!pageContext)
+      throw new Error(
+        "Inferred action document context is not part of the demonstration.",
+      );
+    if (inferred.asPostcondition) {
+      anchor.postconditions.push({
+        type: inferred.action === "navigation" ? "url-path" : "text-visible",
+        ...(inferred.action === "navigation"
+          ? { expected: pageContext.pathname }
+          : {}),
+        description: inferred.justification,
+      });
+      continue;
+    }
+    const step: CompiledStep = {
+      id: createId("step"),
+      sourceActionId: `inferred:${inferred.position.relativeToSourceActionId}:${inferredIndex + 1}`,
+      pageContextId,
+      action: inferred.action,
+      name: inferred.name,
+      locatorCandidates: [],
+      optional: inferred.confidence < 0.85,
+      preconditions: [],
+      postconditions: [],
+      semanticEnrichment: {
+        intention: inferred.justification,
+        semanticTarget: `${pageContext.origin}${pageContext.pathname}`,
+        confidence: inferred.confidence,
+      },
+      inferred: true,
+      evidenceRefs: inferred.evidenceRefs,
+    };
+    merged.splice(
+      inferred.position.placement === "before" ? anchorIndex : anchorIndex + 1,
+      0,
+      step,
+    );
+  }
+  return merged;
 }
 
 function compileLoops(
@@ -1053,6 +1387,33 @@ function generatedLocator(
     return rule.staticText
       ? `${locator}.filter({ hasText: ${generatedExactTextPattern(rule.staticText)} })`
       : locator;
+  }
+  if (
+    rule.strategy === "canonical-href" ||
+    rule.strategy === "icon-evidence" ||
+    rule.strategy === "row-icon-context"
+  ) {
+    const href = rule.canonicalHref ? new URL(rule.canonicalHref) : undefined;
+    const hrefSelector = href
+      ? `a[href^=${JSON.stringify(href.pathname)}],a[href^=${JSON.stringify(`${href.origin}${href.pathname}`)}]`
+      : "a[href],a[onclick],[role=link]";
+    const iconSelector = rule.iconAlt
+      ? `img[alt=${JSON.stringify(rule.iconAlt)}],[role=img][aria-label=${JSON.stringify(rule.iconAlt)}]`
+      : rule.iconTitle
+        ? `img[title=${JSON.stringify(rule.iconTitle)}],[role=img][title=${JSON.stringify(rule.iconTitle)}]`
+        : rule.iconSrc
+          ? (() => {
+              const icon = new URL(rule.iconSrc);
+              return `img[src^=${JSON.stringify(icon.pathname)}],img[src^=${JSON.stringify(`${icon.origin}${icon.pathname}`)}]`;
+            })()
+          : undefined;
+    const scope =
+      rule.strategy === "row-icon-context"
+        ? `${root}.locator('tr').filter({ hasText: ${JSON.stringify(rule.rowText)} }).locator(${JSON.stringify(hrefSelector)})`
+        : `${root}.locator(${JSON.stringify(hrefSelector)})`;
+    return iconSelector
+      ? `${scope}.filter({ has: ${root}.locator(${JSON.stringify(iconSelector)}) })`
+      : scope;
   }
   return `${root}.locator(${JSON.stringify(rule.structuralPath ?? candidate.selectorPreview)})`;
 }
@@ -1181,7 +1542,11 @@ export async function compileDemonstration({
   }
   let steps: CompiledStep[];
   try {
-    steps = await compileSteps(session, graph, localValues);
+    steps = mergeInferredActions(
+      aiOutput,
+      await compileSteps(session, graph, localValues, aiOutput),
+      session,
+    );
   } catch (error) {
     throw compilationStageError("locator-validation", error);
   }

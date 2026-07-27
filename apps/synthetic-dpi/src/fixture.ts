@@ -438,3 +438,67 @@ export function renderKeyboardValidationWorkflow() {
     });
   </script></body></html>`;
 }
+
+export function renderMultiDocumentConsultations() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Consultations synthétiques</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC MULTI-DOCUMENT WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Consultations</h1></div>
+  <p>Parcours synthétique sans donnée réelle.</p>
+  <a href="/fixture/multidoc/sejours.cgi" data-vc-action="open-stays">Ouvrir les séjours</a>
+  </article></main></body></html>`;
+}
+
+export function renderMultiDocumentStays() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Séjours synthétiques</title>
+  <style>${baseStyles} table{width:100%;border-collapse:collapse}th,td{padding:10px;border:1px solid #c7d2cc;text-align:left}img{display:block}</style>
+  </head><body><div class="lab">LAB MODE — SYNTHETIC MULTI-DOCUMENT WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Séjours</h1></div>
+  <form id="stay-row-actions" name="stay-row-actions" action="/fixture/multidoc/sejours.cgi">
+  <table aria-label="Séjours synthétiques"><thead><tr><th>Séjour</th><th>Unité</th><th>Action</th></tr></thead>
+  <tbody><tr><td>Séjour synthétique Alpha</td><td>Étage témoin</td><td>
+    <a href="/fixture/multidoc/codage_etage.cgi" onclick="return true">
+      <img src="/fixture/assets/codage-ngap.png" title="Ouvrir le codage NGAP" width="24" height="24">
+    </a>
+  </td></tr></tbody></table>
+  </form>
+  </article></main></body></html>`;
+}
+
+export function renderMultiDocumentCoding() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage étage synthétique</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC MULTI-DOCUMENT WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Codage étage</h1></div>
+  <form name="ngap-coding" class="record-grid">
+    <section aria-labelledby="ngap-heading"><h2 id="ngap-heading">Code NGAP</h2>
+      <label for="ngap-code">Acte NGAP</label>
+      <select id="ngap-code" name="ngap_code">
+        <option value="">Choisir</option>
+        <option value="110">Acte administratif</option>
+        <option value="214">Consultation NGAP</option>
+        <option value="318">Déplacement</option>
+      </select>
+      <button type="button" data-vc-action="add-ngap">Ajouter un code NGAP</button>
+      <p role="status" data-vc-outcome="pending">Aucun code ajouté.</p>
+    </section>
+  </form></article></main>
+  <script>
+    const select = document.querySelector('#ngap-code');
+    const status = document.querySelector('[data-vc-outcome]');
+    select.addEventListener('change', () => {
+      status.textContent = select.value === '214' ? 'Code 214 sélectionné.' : 'Sélection modifiée.';
+      queueMicrotask(() => select.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    });
+    document.querySelector('[data-vc-action=add-ngap]').addEventListener('click', () => {
+      if (select.value !== '214') {
+        status.dataset.vcOutcome = 'error';
+        status.textContent = 'Le code attendu n’est pas sélectionné.';
+        return;
+      }
+      status.dataset.vcOutcome = 'success';
+      status.className = 'status success';
+      status.textContent = 'Code NGAP 214 ajouté.';
+    });
+  </script></body></html>`;
+}

@@ -108,6 +108,8 @@ export function candidate(
 export function session(): DemonstrationSession {
   const page = {
     id: "page-main",
+    pageId: "browser-page-main",
+    documentOrdinal: 1,
     role: "main" as const,
     origin: "http://127.0.0.1:4273",
     pathname: "/fixture",
