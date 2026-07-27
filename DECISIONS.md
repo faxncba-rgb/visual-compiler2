@@ -8,13 +8,13 @@ The compiler preserves the demonstrated page, frame, element fingerprint, and
 semantic container. Generalization may introduce bounded control flow but may
 not replace a demonstrated target with the first generic role match.
 
-## ADR-002 — Direct compilation precedes AI generalization
+## ADR-002 — GPT-5.6 produces Semantic IR once at compile time
 
 **Status:** Accepted
 
-Literal demonstrations compile locally without GPT. The optional AI boundary
-accepts redacted structure and explicit instructions, returns structured
-semantic output, and is mocked during autonomous development.
+Compile accepts redacted structure and optional instructions, calls GPT-5.6
+once, validates strict structured Semantic IR, then emits a deterministic
+artifact. Automated tests inject a mock of the same boundary.
 
 ## ADR-003 — Runtime is OpenAI-free
 

@@ -52,8 +52,8 @@ profiles or authentication state from Visual Compiler 1 or another project.
 
 ## Preserved boundaries
 
-- direct compilation requires no GPT;
-- optional generalized compilation remains mocked and schema-validated;
+- normal compilation calls GPT-5.6 once and validates structured Semantic IR;
+- automated compilation is mocked and makes no OpenAI request;
 - runtime contains no OpenAI client and blocks OpenAI HTTP/WebSocket access;
 - query parameters, authentication data and form values remain outside
   artifacts and diagnostics;

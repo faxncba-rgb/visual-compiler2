@@ -17,9 +17,9 @@ does not contact the real DPI.
 6. Confirm the concise timeline is chronological, ordinary text is one fill,
    the nested Enregistrer target is the actionable link, popup/frame events
    follow it causally and the summary reports executable actions.
-7. Enter a unique synthetic name in **Workflow name**. Leave **Optional AI
-   generalization** empty. Confirm
-   **Direct local compilation — no AI call**, then select **Compile**.
+7. Enter a unique synthetic name in **Workflow name**. Leave the optional
+   GPT-5.6 instruction empty. Confirm **GPT-5.6 compile-time compilation
+   ready**, then select **Compile**.
 8. Confirm `READY_TO_RUN`, the passive **Saved locally** status and the new
    immutable version in **Saved workflows**. Confirm there are no diagnostics.
    Open **Advanced details** only if you need to inspect the Page Context Graph
@@ -28,7 +28,9 @@ does not contact the real DPI.
    demonstrated literal is reinserted into the consultation editor, Date and
    Heure remain unchanged, **Enregistrer** is invoked exactly once, the popup
    completes, the editor resets and the expected history/result appears.
-10. Confirm result `PASSED`, Runtime LLM calls `0`, Runtime OpenAI requests `0`.
+10. Confirm the artifact reports model `gpt-5.6` and one compile-time model
+    call. Confirm result `PASSED`, Runtime LLM calls `0`, Runtime OpenAI
+    requests `0`.
 11. Select **Run again** and confirm one additional deterministic replay without
     re-teaching or recompiling.
 12. Stop and restart Studio. Select the named version from **Saved workflows**,
@@ -60,6 +62,18 @@ does not contact the real DPI.
 7. Correct the ambiguity and choose **Retry compile** without re-teaching.
 8. Trigger another diagnostic, select **Clear**, and confirm only the visible
    card clears while the append-only event log remains.
+
+## Ordered keyboard retest
+
+1. Start a fresh synthetic teaching session.
+2. Perform exactly: click the chooser, press `c`, press `Enter`, then click
+   **Valider**.
+3. Stop teaching and confirm `c` and `Enter` are two consecutive keyboard
+   actions tied to the focus owner captured at each event.
+4. Compile with the GPT instruction empty and confirm no locator rejection is
+   raised for the now-closed listbox/dialog.
+5. Run locally and then **Run again**. Confirm `PASSED` twice and both runtime
+   AI counters remain zero.
 
 ## Deliberate boundaries
 

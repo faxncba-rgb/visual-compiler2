@@ -50,11 +50,15 @@ requires an explicit local HTTP URL and rejects any remote target, including
 the real DPI. The checked-in Playwright web server command always sets the local
 test override.
 
-Direct compilation and the mocked generalizer make no OpenAI request. The
-runtime has no OpenAI dependency, does not require `OPENAI_API_KEY`, and blocks
-OpenAI HTTP and WebSocket endpoints before dispatch. An attempted call is
-reported as a failed policy check while telemetry remains `llmCalls: 0` and
-`openAIRequests: 0`.
+Normal Compile makes one GPT-5.6 Responses API request with a rich redacted
+trace and strict Structured Outputs. The key is read only from ignored
+`.env.local` with mode `0600`, captured by the compile-only provider and removed
+from `process.env`. Automated tests use a mock and make no OpenAI request.
+
+The runtime has no OpenAI dependency, does not require or receive
+`OPENAI_API_KEY`, and blocks OpenAI HTTP and WebSocket endpoints before
+dispatch. An attempted runtime call is reported as a failed policy check while
+telemetry remains `llmCalls: 0` and `openAIRequests: 0`.
 
 Runtime source and dependency-graph checks are part of final validation. No
 OpenAI SDK package is imported or installed.

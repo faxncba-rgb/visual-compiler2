@@ -11,10 +11,11 @@ flowchart LR
   Recorder --> Trace["Redacted Teaching trace"]
   Recorder --> Graph["Page Context Graph"]
   Recorder --> IR["Validated Demonstration IR"]
-  IR --> Compiler["Direct compiler"]
-  IR -. "redacted structure + explicit instruction" .-> Mock["Validated mock generalizer"]
+  IR --> Redaction["Rich redacted compile trace"]
+  Redaction --> GPT["GPT-5.6 once (mocked in tests)"]
+  GPT --> Semantic["Validated Semantic IR"]
+  Semantic --> Compiler["Deterministic artifact compiler"]
   Compiler --> Artifact["Versioned artifact"]
-  Mock --> Artifact
   Artifact --> Library["Immutable local Workflow Library"]
   Library --> Runtime
   Artifact --> Runtime["Deterministic runtime"]
@@ -112,14 +113,15 @@ Values have an explicit persistence contract:
 - authentication-like controls and secret-shaped values are rejected before
   they enter the Demonstration IR.
 
-Optional AI instructions and the redacted structural preview are separate from
-both classes. Neither receives literal or runtime-derived content.
+Optional GPT instructions and the redacted structural preview are separate
+from both classes. Neither receives literal or runtime-derived content.
 
 ## Compiler and outcome model
 
-The direct compiler translates a stopped demonstration without GPT. Optional
-generalization is currently handled by a strict, schema-validated mock that
-makes no model request.
+Normal Compile invokes GPT-5.6 once through the Responses API and strict
+Structured Outputs. The returned Semantic IR is validated again with Zod and
+must preserve every demonstrated action ID, type and order. Tests inject a
+strict mock of this boundary and make no network request.
 
 For an editable action, compilation records ordered deterministic strategies:
 standard Playwright fill, contenteditable fill, sequential keys,
@@ -171,9 +173,10 @@ Studio normalizes every error into one redacted persistent diagnostic. The same
 object drives the visible card, clipboard text, in-memory event history,
 `local-data/studio-events.jsonl` and terminal output.
 
-The runtime has no OpenAI dependency. Managed browser routing blocks OpenAI
-HTTP and WebSocket endpoints and turns attempts into policy failures. No live
-AI adapter is enabled.
+The runtime has no OpenAI dependency. The compile-only provider captures the
+key before `OPENAI_API_KEY` is removed from the process environment. Managed
+browser routing blocks OpenAI HTTP and WebSocket endpoints and turns runtime
+attempts into policy failures.
 
 Deliberate unsupported boundaries are cross-origin frame internals, closed
 shadow DOM and application editors/copy gestures that expose no legitimate DOM

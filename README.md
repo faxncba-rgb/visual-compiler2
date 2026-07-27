@@ -5,8 +5,9 @@
 Visual Compiler 2 is a local, demonstration-first browser workflow compiler
 for an authorized synthetic testing environment. Studio launches its own
 Playwright-managed Chromium, the operator authenticates and navigates manually,
-and recording begins only after **Start teaching**. A stopped demonstration
-compiles into a deterministic artifact that runs locally without OpenAI.
+and recording begins only after **Start teaching**. A stopped demonstration is
+compiled once by GPT-5.6 into validated Semantic IR, then runs deterministically
+without further OpenAI calls.
 
 ![Visual Compiler 2 Lab Studio](docs/screenshots/studio-lab.png)
 
@@ -39,6 +40,11 @@ npx playwright install chromium
 npm run dev
 ```
 
+Normal compilation reads `OPENAI_API_KEY` only from the Git-ignored
+`.env.local` file, which must have mode `0600`. The compiler captures the key
+privately and removes it from the process environment before any runtime can
+start.
+
 Open <http://127.0.0.1:3100>. The normal flow is:
 
 1. Authenticate and navigate manually in the browser that opened
@@ -54,9 +60,10 @@ Open <http://127.0.0.1:3100>. The normal flow is:
 artifact and runtime as local execution; local execution supplies no animation
 callbacks and requires no per-step confirmation.
 
-The optional **AI generalization** area is collapsed by default. When empty,
-Studio shows **Direct local compilation — no AI call**. The current generalized
-provider is a validated mock and makes no network request.
+The optional GPT-5.6 instruction area is collapsed by default; an empty
+instruction still compiles once with GPT-5.6. If the local key is unavailable,
+Studio says so explicitly and disables Compile. Automated tests use a validated
+mock of the same structured-output contract and never call OpenAI.
 
 ## Teaching and causal recording
 
@@ -73,7 +80,7 @@ The recorder consolidates raw browser noise into high-level actions:
 - explicit extract-to-memory and memory-to-target dataflow for observable
   copy/paste gestures.
 
-Every action has a monotonic sequence and time offset, stable page/frame
+Every action has a monotonic capture sequence and time offset, stable page/frame
 context, semantic target descriptor, action compatibility, observed reactions,
 resulting stable state and causal links where later browser events were caused
 by a human action. The Page Context Graph stores stable semantic identities,
@@ -104,6 +111,13 @@ Visual Compiler 2 distinguishes three value classes:
 - credentials, passwords, authentication-like fields, cookies, tokens, browser
   storage, authorization/CSRF data, session identifiers and query parameters
   are forbidden and excluded before recording or persistence.
+
+The compile-time model receives only a redacted structural trace: chronology,
+keyboard scope, semantic DOM/accessibility descriptors, frames, popup states
+and observed reactions. Form contents, query parameters, cookies, tokens and
+authentication data are excluded. Its structured Semantic IR must preserve
+every demonstrated action ID, type and order before the deterministic compiler
+accepts it.
 
 The deterministic compiler records an ordered entry strategy for every editable
 target: standard fill, contenteditable fill, sequential keys when required,

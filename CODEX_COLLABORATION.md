@@ -1,8 +1,9 @@
 # Codex collaboration guide
 
 This repository is developed on
-`codex/teach-by-demonstration-mvp`. Do not merge `main`, force-push, contact the
-real DPI from automation or enable a live OpenAI adapter.
+`codex/teach-by-demonstration-mvp`. Do not merge `main`, force-push or contact
+the real DPI from automation. Live OpenAI access is compile-time only; tests
+must inject the structured GPT mock.
 
 ## Product invariants
 
