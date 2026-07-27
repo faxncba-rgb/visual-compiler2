@@ -49,8 +49,7 @@ async function withIsolatedStudio(
   } finally {
     if (previousHeadless === undefined) delete process.env.VC_HEADLESS;
     else process.env.VC_HEADLESS = previousHeadless;
-    await controller.browser.close().catch(() => undefined);
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeStudioServer(server, controller);
     await rm(rootDirectory, { recursive: true, force: true });
   }
 }
@@ -112,6 +111,7 @@ test("Studio compiles and replays click → c → Enter → Valider through mock
       .click();
     await expect(page.locator("#studioState")).toHaveText(
       "DEMONSTRATION_REVIEW",
+      { timeout: 15_000 },
     );
 
     const demonstrated = controller.session?.actions.filter((action) =>
@@ -157,7 +157,11 @@ test("Studio compiles and replays click → c → Enter → Valider through mock
       llmCalls: 0,
       openAIRequests: 0,
     });
+    const firstRunId = controller.telemetry?.runId;
     await page.getByRole("button", { name: "Run again", exact: true }).click();
+    await expect
+      .poll(() => controller.telemetry?.runId, { timeout: 15_000 })
+      .not.toBe(firstRunId);
     await expect(page.locator("#studioState")).toHaveText("PASSED");
     expect(controller.telemetry).toMatchObject({
       llmCalls: 0,
@@ -169,7 +173,9 @@ test("Studio compiles and replays click → c → Enter → Valider through mock
 
 async function closeStudioServer(server: Server, controller: StudioController) {
   await controller.browser.close().catch(() => undefined);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  server.closeAllConnections();
+  await closed;
 }
 
 async function teachLegacyLayoutA(
