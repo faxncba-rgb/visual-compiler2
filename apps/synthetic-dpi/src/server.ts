@@ -8,6 +8,8 @@ import {
   renderFixture,
   renderInteractionControls,
   renderKeyboardValidationWorkflow,
+  renderLegacyRedirectConsultations,
+  renderLegacyRedirectIntermediate,
   renderMultiDocumentCoding,
   renderMultiDocumentConsultations,
   renderMultiDocumentStays,
@@ -38,6 +40,10 @@ export function createSyntheticDpiServer() {
       return html(response, renderValidationPopup(url));
     if (url.pathname === "/fixture/editor-frame")
       return html(response, renderEditorFrame());
+    if (url.pathname === "/fixture/legacy/consultations.cgi")
+      return html(response, renderLegacyRedirectConsultations());
+    if (url.pathname === "/fixture/legacy/consultation_default.cgi")
+      return html(response, renderLegacyRedirectIntermediate());
     if (url.pathname === "/fixture/popup-workflow")
       return html(response, renderPopupWorkflow());
     if (url.pathname === "/fixture/popup-action")

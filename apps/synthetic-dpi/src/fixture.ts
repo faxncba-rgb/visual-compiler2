@@ -244,6 +244,61 @@ export function renderEditorFrame() {
   <textarea id="${id}" name="consultation_frame" data-vc-field="consultation" data-vc-editor="iframe"></textarea></body></html>`;
 }
 
+export function renderLegacyRedirectConsultations() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Consultations DPI héritées</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC LEGACY REDIRECT ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Liste des consultations synthétiques</h1></div>
+  <form name="consultation-record" class="record-grid">
+    <section class="consultation" aria-labelledby="legacy-consultation-heading">
+      <h2 id="legacy-consultation-heading">Saisie de la consultation</h2>
+      <label>Texte</label>
+      <iframe title="Éditeur de consultation hérité" data-vc-field="consultation-frame"></iframe>
+      <a href="#" class="save" data-vc-action="save-consultation" onclick="return saveLegacyConsultation(event)"><span>Enregistrer</span></a>
+      <p class="meta">Activations Enregistrer : <strong data-vc-save-count>0</strong></p>
+      <h3>Historique des consultations</h3>
+      <ol data-vc-consultation-history></ol>
+    </section>
+  </form></article></main>
+  <script>
+    const entries = JSON.parse(sessionStorage.getItem('vc2-legacy-consultations') || '[]');
+    const history = document.querySelector('[data-vc-consultation-history]');
+    for (const value of entries) {
+      const item = document.createElement('li');
+      item.textContent = 'Consultation synthétique enregistrée · ' + value;
+      history.append(item);
+    }
+    document.querySelector('[data-vc-save-count]').textContent = String(entries.length);
+    const editorFrame = document.querySelector('iframe[data-vc-field="consultation-frame"]');
+    const editorDocument = editorFrame.contentDocument;
+    editorDocument.open();
+    editorDocument.write('<!doctype html><html><head><title>Éditeur hérité</title></head><body></body></html>');
+    editorDocument.close();
+    editorDocument.body.setAttribute('contenteditable', 'true');
+    editorDocument.body.style.cssText = 'margin:0;padding:12px;min-height:140px;font:16px system-ui';
+    editorDocument.designMode = 'on';
+    function saveLegacyConsultation(event) {
+      event.preventDefault();
+      const value = String(editorDocument.body.innerText || '').trim();
+      if (value) {
+        entries.push(value);
+        sessionStorage.setItem('vc2-legacy-consultations', JSON.stringify(entries));
+      }
+      location.assign('/fixture/legacy/consultation_default.cgi');
+      return false;
+    }
+  </script></body></html>`;
+}
+
+export function renderLegacyRedirectIntermediate() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Redirection synthétique</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC LEGACY REDIRECT ONLY</div>
+  <main><section><h1>Chargement en cours…</h1><p>Retour automatique vers les consultations.</p></section></main>
+  <script>setTimeout(() => location.replace('/fixture/legacy/consultations.cgi'), 350);</script>
+  </body></html>`;
+}
+
 export function renderDataflowSource() {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Source synthétique</title>
   <style>${baseStyles}</style></head><body>

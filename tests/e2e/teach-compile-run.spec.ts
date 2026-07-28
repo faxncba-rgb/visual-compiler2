@@ -495,4 +495,109 @@ test.describe("editor strategies", () => {
       },
     );
   });
+
+  test("inherited legacy editor survives a redirect document and runs repeatedly", async () => {
+    await withManagedBrowser(
+      `${fixtureOrigin}/fixture/legacy/consultations.cgi`,
+      async ({ browser, page, recorder }) => {
+        const demonstratedValue = "test ecriture";
+        await recorder.start();
+        const editor = page
+          .frameLocator('iframe[title="Éditeur de consultation hérité"]')
+          .locator("body");
+        await editor.click();
+        await editor.pressSequentially(demonstratedValue);
+        await page.waitForTimeout(380);
+        await page.getByText("Enregistrer", { exact: true }).click();
+        await page.waitForURL(
+          `${fixtureOrigin}/fixture/legacy/consultations.cgi`,
+        );
+        await expect(
+          page
+            .locator("[data-vc-consultation-history] > li")
+            .filter({ hasText: demonstratedValue }),
+        ).toHaveCount(1);
+
+        const session = await recorder.stop();
+        const executableActions = session.actions.filter((action) =>
+          ["fill", "click"].includes(action.action),
+        );
+        expect(executableActions.map((action) => action.action)).toEqual([
+          "click",
+          "fill",
+          "click",
+        ]);
+        const fillAction = executableActions.find(
+          (action) => action.action === "fill",
+        );
+        expect(fillAction).toMatchObject({
+          action: "fill",
+          value: {
+            kind: "literal",
+            value: demonstratedValue,
+            persistence: "workflow",
+          },
+          target: {
+            role: "textbox",
+            editorAdapter: "contenteditable",
+            descriptor: {
+              frame: {
+                role: "same-origin",
+              },
+            },
+          },
+        });
+        expect(
+          session.pages.find(
+            (context) => context.id === fillAction!.pageContextId,
+          ),
+        ).toMatchObject({
+          role: "frame",
+          sameOriginInspectable: true,
+        });
+
+        const workflow = await compilePrimary({
+          browser,
+          session,
+          values: recorder.localValues,
+        });
+        expect(workflow.compilationMetadata.modelCalls).toBe(1);
+        expect(
+          workflow.steps
+            .filter((step) => ["fill", "click"].includes(step.action))
+            .map((step) => step.action),
+        ).toEqual(["click", "fill", "click"]);
+        expect(
+          workflow.steps.filter((step) => step.action === "keyboard"),
+        ).toHaveLength(0);
+
+        const first = await new DeterministicRuntime({
+          context: browser.context,
+          workflow,
+          variables: recorder.localValues,
+          mode: "local",
+        }).run();
+        expect(first.state, first.error).toBe("Passed");
+        expect(first.llmCalls).toBe(0);
+        expect(first.openAIRequests).toBe(0);
+        await expect(page.locator("[data-vc-save-count]")).toHaveText("2");
+
+        const second = await new DeterministicRuntime({
+          context: browser.context,
+          workflow,
+          variables: recorder.localValues,
+          mode: "local",
+        }).run();
+        expect(second.state, second.error).toBe("Passed");
+        expect(second.llmCalls).toBe(0);
+        expect(second.openAIRequests).toBe(0);
+        await expect(page.locator("[data-vc-save-count]")).toHaveText("3");
+        await expect(
+          page
+            .locator("[data-vc-consultation-history] > li")
+            .filter({ hasText: demonstratedValue }),
+        ).toHaveCount(3);
+      },
+    );
+  });
 });

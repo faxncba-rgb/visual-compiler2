@@ -88,6 +88,19 @@ async function frameFingerprint(frame: Frame) {
   );
 }
 
+async function isTopDocumentInspectable(frame: Frame) {
+  if (frame === frame.page().mainFrame()) return true;
+  return frame
+    .evaluate(() => {
+      try {
+        return Boolean(globalThis.top?.document);
+      } catch {
+        return false;
+      }
+    })
+    .catch(() => false);
+}
+
 export class PageContextGraph {
   readonly #pageIds = new WeakMap<Page, string>();
   readonly #activePageDocuments = new WeakMap<Page, string>();
@@ -340,7 +353,9 @@ export class PageContextGraph {
     const id = createId("frame");
     const canonical = safeCanonical(frame.url());
     const pageCanonical = safeCanonical(page.url());
-    const sameOrigin = canonical.origin === pageCanonical.origin;
+    const sameOrigin =
+      canonical.origin === pageCanonical.origin ||
+      (await isTopDocumentInspectable(frame));
     const title = await frame.title().catch(() => "");
     const node: RecordedPageContext = {
       id,
@@ -384,7 +399,9 @@ export class PageContextGraph {
     const page = frame.page();
     const canonical = safeCanonical(frame.url());
     const pageCanonical = safeCanonical(page.url());
-    const sameOrigin = canonical.origin === pageCanonical.origin;
+    const sameOrigin =
+      canonical.origin === pageCanonical.origin ||
+      (await isTopDocumentInspectable(frame));
     const title = await frame.title().catch(() => "");
     const id = createId("frame-document");
     const documentOrdinal =
@@ -515,15 +532,23 @@ export class PageContextGraph {
         semanticEquivalentFound: false,
       };
     }
+    const recordedContext = this.#nodes.get(recordedContextId);
+    const inspectableOpaqueContext = Boolean(
+      recordedContext?.sameOriginInspectable &&
+        recordedContext.origin === "opaque:",
+    );
     const matches: Frame[] = [];
     for (const page of this.context.pages()) {
       if (page.isClosed()) continue;
       for (const frame of page.frames()) {
         if (frame === page.mainFrame() || frame.isDetached()) continue;
         const canonical = safeCanonical(frame.url());
+        const canonicalMatch =
+          canonical.origin === frameIdentity.origin &&
+          canonical.pathname === frameIdentity.pathname;
         if (
-          canonical.origin !== frameIdentity.origin ||
-          canonical.pathname !== frameIdentity.pathname
+          !canonicalMatch &&
+          !(inspectableOpaqueContext && (await isTopDocumentInspectable(frame)))
         )
           continue;
         if (frameIdentity.name && frame.name() !== frameIdentity.name) continue;

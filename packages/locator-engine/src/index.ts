@@ -312,6 +312,29 @@ export function generateLocatorCandidates(
       ),
     );
   }
+  if (
+    target.frame.role === "same-origin" &&
+    target.tag === "body" &&
+    target.role === "textbox" &&
+    target.editable &&
+    target.structuralPath
+  ) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "structural-fallback",
+          structuralPath: target.structuralPath,
+          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+        },
+        target.structuralPath,
+        0.94,
+        0.92,
+        "Unique editable document root inside the demonstrated inspectable editor frame.",
+        order++,
+      ),
+    );
+  }
   if (target.semanticContainer?.heading && target.structuralPath) {
     candidates.push(
       baseCandidate(

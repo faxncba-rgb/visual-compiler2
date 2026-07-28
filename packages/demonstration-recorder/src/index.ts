@@ -363,8 +363,10 @@ type DomStabilityResult = {
 };
 
 const RECORDER_INIT_SCRIPT = `(() => {
-  if (document.__vc2RecorderInstalled) return;
-  Object.defineProperty(document, '__vc2RecorderInstalled', { value: true });
+  globalThis.__vc2RecorderListenerController?.abort();
+  const listenerController = new AbortController();
+  globalThis.__vc2RecorderListenerController = listenerController;
+  const listenerOptions = { capture: true, signal: listenerController.signal };
   globalThis.__vc2RecorderInstalled = true;
   let activeEdit;
   let editSequence = 0;
@@ -842,37 +844,37 @@ const RECORDER_INIT_SCRIPT = `(() => {
   };
   document.addEventListener('focusin', event => {
     openEdit(event.target);
-  }, true);
+  }, listenerOptions);
   document.addEventListener('focusout', event => {
     if (activeEdit?.element === event.target) flushEdit('commit');
-  }, true);
+  }, listenerOptions);
   document.addEventListener('beforeinput', event => {
     openEdit(event.target);
-  }, true);
+  }, listenerOptions);
   document.addEventListener('compositionstart', event => {
     const edit = openEdit(event.target);
     if (edit) edit.compositionObserved = true;
-  }, true);
+  }, listenerOptions);
   document.addEventListener('compositionupdate', event => {
     const edit = openEdit(event.target);
     if (edit) edit.compositionObserved = true;
-  }, true);
+  }, listenerOptions);
   document.addEventListener('compositionend', event => {
     updateEdit(event.target, { inputEvent: true, composition: true });
-  }, true);
+  }, listenerOptions);
   document.addEventListener('paste', event => {
     const edit = openEdit(event.target);
     if (edit) {
       edit.pasteObserved = true;
       edit.valueSource = 'runtime-variable';
     }
-  }, true);
+  }, listenerOptions);
   document.addEventListener('copy', event => {
     flushEdit('commit');
     const info = target(event.target);
     if (!info || info.password || info.forbiddenValue) return;
     send({ kind: 'extract', target: info, occurredAt: Date.now() });
-  }, true);
+  }, listenerOptions);
   document.addEventListener('click', event => {
     flushEdit('commit');
     const raw = event.target;
@@ -889,26 +891,26 @@ const RECORDER_INIT_SCRIPT = `(() => {
       applicationStateBeforeAction: applicationState(),
       occurredAt: Date.now()
     });
-  }, true);
+  }, listenerOptions);
   document.addEventListener('dblclick', event => {
     flushEdit('commit');
     const raw = event.target;
     const element = actionableAncestor(raw) || raw;
     const info = target(element, raw);
     if (!info?.password && !info?.forbiddenValue) send({ kind: 'double-click', target: info, occurredAt: Date.now() });
-  }, true);
+  }, listenerOptions);
   document.addEventListener('input', event => {
     const element = event.target;
     if (element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type)) return;
     updateEdit(element, { inputEvent: true });
-  }, true);
+  }, listenerOptions);
   document.addEventListener('change', event => {
     const element = event.target;
     if (element instanceof HTMLInputElement && ['checkbox','radio'].includes(element.type)) return;
     if (!activeEdit || activeEdit.element !== element) return;
     updateEdit(element, { inputEvent: true });
     flushEdit('commit');
-  }, true);
+  }, listenerOptions);
   document.addEventListener('keydown', event => {
     const modifiers = [
       event.metaKey ? 'Meta' : '',
@@ -917,7 +919,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
       event.shiftKey ? 'Shift' : ''
     ].filter(Boolean);
     const focused = document.activeElement instanceof Element ? document.activeElement : undefined;
-    const pageScoped = !focused || focused === document.body || focused === document.documentElement;
+    const pageScoped = !focused || focused === document.documentElement ||
+      (focused === document.body && !isEditable(focused));
     const focusOwner = pageScoped ? undefined : (actionableAncestor(focused) || focused);
     const significantCharacter = event.key.length === 1 &&
       (!isEditable(focusOwner) || focusOwner instanceof HTMLSelectElement);
@@ -932,15 +935,15 @@ const RECORDER_INIT_SCRIPT = `(() => {
       key,
       occurredAt: Date.now()
     });
-  }, true);
+  }, listenerOptions);
   document.addEventListener('keyup', event => {
     if (activeEdit?.element === event.target && activeEdit.target.editorAdapter === 'keyboard') {
       updateEdit(event.target, { inputEvent: true });
     }
-  }, true);
+  }, listenerOptions);
   document.addEventListener('selectionchange', () => {
     if (activeEdit) activeEdit.selectionObserved = true;
-  }, true);
+  }, listenerOptions);
   document.addEventListener('submit', event => {
     flushEdit('commit');
     const raw = event.submitter || event.target;
@@ -951,20 +954,30 @@ const RECORDER_INIT_SCRIPT = `(() => {
       applicationStateBeforeAction: applicationState(),
       occurredAt: Date.now()
     });
-  }, true);
-  globalThis.addEventListener('pagehide', () => flushEdit('commit'), true);
-  globalThis.addEventListener('beforeunload', () => flushEdit('commit'), true);
-  globalThis.addEventListener('focus', () => send({ kind: 'focus', occurredAt: Date.now() }));
+  }, listenerOptions);
+  globalThis.addEventListener('pagehide', () => flushEdit('commit'), listenerOptions);
+  globalThis.addEventListener('beforeunload', () => flushEdit('commit'), listenerOptions);
+  globalThis.addEventListener('focus', () => send({ kind: 'focus', occurredAt: Date.now() }), listenerOptions);
 })();`;
 
-export function shouldExcludeFrame(frame: Frame) {
+export async function shouldExcludeFrame(frame: Frame) {
+  if (frame === frame.page().mainFrame()) return false;
   try {
     const frameOrigin = new URL(frame.url()).origin;
     const pageOrigin = new URL(frame.page().url()).origin;
-    return frame !== frame.page().mainFrame() && frameOrigin !== pageOrigin;
+    if (frameOrigin !== "null") return frameOrigin !== pageOrigin;
   } catch {
-    return frame !== frame.page().mainFrame();
+    // Empty, javascript: and other inherited URLs require a capability check.
   }
+  return !(await frame
+    .evaluate(() => {
+      try {
+        return Boolean(globalThis.top?.document);
+      } catch {
+        return false;
+      }
+    })
+    .catch(() => false));
 }
 
 export function variableNameForTarget(target: BrowserTargetPayload) {
@@ -1284,11 +1297,12 @@ export class DemonstrationRecorder {
       this.context
         .pages()
         .flatMap((page) => page.frames())
-        .map((frame) =>
-          frame
+        .map(async (frame) => {
+          await frame.evaluate(RECORDER_INIT_SCRIPT).catch(() => undefined);
+          await frame
             .evaluate("globalThis.__vc2ResetEditingTransactions?.()")
-            .catch(() => undefined),
-        ),
+            .catch(() => undefined);
+        }),
     );
     this.#session = {
       id: createId("demo"),
@@ -1867,7 +1881,7 @@ export class DemonstrationRecorder {
       payload.editingTransaction.startedAt < this.#startedAtMs
     )
       return;
-    if (shouldExcludeFrame(frame)) {
+    if (await shouldExcludeFrame(frame)) {
       this.#crossOriginEventsExcluded += 1;
       return;
     }

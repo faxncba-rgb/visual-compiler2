@@ -156,7 +156,7 @@ describe("high-level recorder", () => {
     ).toBe("selected_option");
   });
 
-  it("excludes cross-origin frames as opaque contexts", () => {
+  it("excludes cross-origin frames while accepting inspectable inherited documents", async () => {
     const page = {
       url: () => "http://127.0.0.1:4273/fixture",
       mainFrame: () => main,
@@ -166,8 +166,20 @@ describe("high-level recorder", () => {
       page: () => page,
       url: () => "http://localhost:4273/fixture/cross-origin",
     } as unknown as Frame;
-    expect(shouldExcludeFrame(main)).toBe(false);
-    expect(shouldExcludeFrame(cross)).toBe(true);
+    const inherited = {
+      page: () => page,
+      url: () => "about:blank",
+      evaluate: async () => true,
+    } as unknown as Frame;
+    const opaque = {
+      page: () => page,
+      url: () => "",
+      evaluate: async () => false,
+    } as unknown as Frame;
+    await expect(shouldExcludeFrame(main)).resolves.toBe(false);
+    await expect(shouldExcludeFrame(cross)).resolves.toBe(true);
+    await expect(shouldExcludeFrame(inherited)).resolves.toBe(false);
+    await expect(shouldExcludeFrame(opaque)).resolves.toBe(true);
   });
 
   it("derives relative, popup, reset and invariant success evidence without a form value", () => {

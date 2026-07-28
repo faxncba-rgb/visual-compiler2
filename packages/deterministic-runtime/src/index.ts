@@ -119,6 +119,18 @@ function canonicalMatches(pageUrl: string, context: CompiledPageContext) {
   }
 }
 
+async function isTopDocumentInspectable(frame: Frame) {
+  return frame
+    .evaluate(() => {
+      try {
+        return Boolean(globalThis.top?.document);
+      } catch {
+        return false;
+      }
+    })
+    .catch(() => false);
+}
+
 function runtimeTitlePattern(value: string) {
   return value
     .replaceAll(/\d+/g, "\\d+")
@@ -148,15 +160,15 @@ function throwIfStopped(signal?: AbortSignal) {
 function waitForAbortableTimeout(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(abortError());
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -524,12 +536,13 @@ export class DeterministicRuntime {
       const identity = step.target?.descriptor?.frame ?? step.target?.frame;
       const candidates: Frame[] = [];
       for (const candidate of page.frames()) {
-        if (
-          candidate === page.mainFrame() ||
-          candidate.isDetached() ||
-          !canonicalMatches(candidate.url(), pageContext)
-        )
-          continue;
+        if (candidate === page.mainFrame() || candidate.isDetached()) continue;
+        const canonicalMatch = canonicalMatches(candidate.url(), pageContext);
+        const inspectableOpaqueMatch =
+          pageContext.origin === "opaque:" &&
+          pageContext.sameOriginInspectable &&
+          (await isTopDocumentInspectable(candidate));
+        if (!canonicalMatch && !inspectableOpaqueMatch) continue;
         if (identity?.name && candidate.name() !== identity.name) continue;
         if (identity?.title) {
           const title = await candidate.title().catch(() => "");
@@ -999,6 +1012,20 @@ export class DeterministicRuntime {
     return false;
   }
 
+  async #pollOutcome<T>(
+    read: () => Promise<T>,
+    passed: (actual: T) => boolean,
+  ) {
+    const deadline = Date.now() + Math.min(this.#timeout, 5_000);
+    let actual = await read();
+    while (!passed(actual) && Date.now() < deadline) {
+      throwIfStopped(this.options.signal);
+      await waitForAbortableTimeout(50, this.options.signal);
+      actual = await read();
+    }
+    return actual;
+  }
+
   async #verifyOutcome() {
     const checks: RuntimeTelemetry["outcomeChecks"] = [];
     const mainContext = this.#resolvedMainContext();
@@ -1039,44 +1066,83 @@ export class DeterministicRuntime {
           (this.#pages.resolved.get(evidence.pageContextId) as
             | Page
             | undefined) ?? mainPage;
-        actual = await page
-          .getByText(evidence.target, { exact: true })
-          .isVisible()
-          .catch(() => false);
+        actual = await this.#pollOutcome(
+          () =>
+            page
+              .getByText(evidence.target, { exact: true })
+              .isVisible()
+              .catch(() => false),
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "popup-closed") {
-        actual =
-          this.#pages.closedContexts.has(evidence.pageContextId) ||
-          this.#pages.runtimePopups.get(evidence.pageContextId)?.isClosed() ===
-            true;
+        actual = await this.#pollOutcome(
+          async () =>
+            this.#pages.closedContexts.has(evidence.pageContextId) ||
+            this.#pages.runtimePopups
+              .get(evidence.pageContextId)
+              ?.isClosed() === true,
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "navigation") {
         const context = this.#workflow.pageContexts.find(
           (candidate) => candidate.id === evidence.pageContextId,
         );
-        actual = context ? canonicalMatches(mainPage.url(), context) : false;
+        actual = context
+          ? await this.#pollOutcome(
+              async () => canonicalMatches(mainPage.url(), context),
+              (value) => value === evidence.expected,
+            )
+          : false;
+        if (actual && context) this.#pages.resolved.set(context.id, mainPage);
       } else if (evidence.type === "element-visible") {
-        actual = await mainPage
-          .locator(evidence.target)
-          .isVisible()
-          .catch(() => false);
+        actual = await this.#pollOutcome(
+          () =>
+            mainPage
+              .locator(evidence.target)
+              .isVisible()
+              .catch(() => false),
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "field-value") {
-        actual = await mainPage.locator(evidence.target).inputValue();
+        actual = await this.#pollOutcome(
+          () =>
+            mainPage
+              .locator(evidence.target)
+              .inputValue()
+              .catch(() => ""),
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "structural-marker") {
-        actual = await mainPage
-          .locator(evidence.target)
-          .isVisible()
-          .catch(() => false);
+        actual = await this.#pollOutcome(
+          () =>
+            mainPage
+              .locator(evidence.target)
+              .isVisible()
+              .catch(() => false),
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "relative-count-increase") {
         const baseline = this.#outcomeBaselines.get(
           this.#outcomeBaselineKey(evidence.type, evidence.target),
         );
-        const current = await mainPage.locator(evidence.target).count();
-        actual = current - (typeof baseline === "number" ? baseline : current);
+        actual = await this.#pollOutcome(
+          async () => {
+            const current = await mainPage
+              .locator(evidence.target)
+              .count()
+              .catch(() => 0);
+            return (
+              current - (typeof baseline === "number" ? baseline : current)
+            );
+          },
+          (value) =>
+            typeof evidence.expected === "number" && value >= evidence.expected,
+        );
       } else if (evidence.type === "new-item-contains-variable") {
         const baseline = this.#outcomeBaselines.get(
           this.#outcomeBaselineKey(evidence.type, evidence.target),
         );
         const start = typeof baseline === "number" ? baseline : 0;
-        const count = await mainPage.locator(evidence.target).count();
         const expectedValue = evidence.variableRef
           ? resolveValueReference(
               evidence.variableRef,
@@ -1084,30 +1150,44 @@ export class DeterministicRuntime {
               this.#variables,
             )
           : undefined;
-        actual = false;
-        for (let index = start; index < count; index += 1) {
-          const matches = await mainPage
-            .locator(evidence.target)
-            .nth(index)
-            .evaluate(
-              (element, value) =>
-                Boolean(value && element.textContent?.includes(value)),
-              expectedValue,
-            )
-            .catch(() => false);
-          if (matches) {
-            actual = true;
-            break;
-          }
-        }
+        actual = await this.#pollOutcome(
+          async () => {
+            const count = await mainPage.locator(evidence.target).count();
+            for (let index = start; index < count; index += 1) {
+              const matches = await mainPage
+                .locator(evidence.target)
+                .nth(index)
+                .evaluate(
+                  (element, value) =>
+                    Boolean(value && element.textContent?.includes(value)),
+                  expectedValue,
+                )
+                .catch(() => false);
+              if (matches) return true;
+            }
+            return false;
+          },
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "editor-reset") {
-        actual = await this.#editorResetObserved(evidence.sourceStepId);
+        actual = await this.#pollOutcome(
+          () => this.#editorResetObserved(evidence.sourceStepId),
+          (value) => value === evidence.expected,
+        );
       } else if (evidence.type === "field-unchanged") {
         const baseline = this.#outcomeBaselines.get(
           this.#outcomeBaselineKey(evidence.type, evidence.target),
         );
-        const current = await mainPage.locator(evidence.target).inputValue();
-        actual = typeof baseline === "string" && current === baseline;
+        actual = await this.#pollOutcome(
+          async () => {
+            const current = await mainPage
+              .locator(evidence.target)
+              .inputValue()
+              .catch(() => "");
+            return typeof baseline === "string" && current === baseline;
+          },
+          (value) => value === evidence.expected,
+        );
       }
       const passed =
         evidence.type === "relative-count-increase" &&
