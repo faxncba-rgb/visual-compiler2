@@ -259,12 +259,20 @@ export function generateLocatorCandidates(
       ),
     );
   }
-  const stableRowText = click?.table?.rowText.find(Boolean);
+  const stableRowTexts = click?.table?.rowText.filter(Boolean) ?? [];
+  const stableRowText = stableRowTexts[0];
+  const hasNamedIconEvidence = Boolean(
+    click?.icon && (click.icon.alt || click.icon.title || click.icon.src),
+  );
+  const hasAnonymousStructuralIconEvidence = Boolean(
+    click?.icon && click.canonicalHref && target.descriptor?.rawTargetPromoted,
+  );
   if (
     click?.table &&
     stableRowText &&
     click.icon &&
-    (click.icon.alt || click.icon.title || click.icon.src)
+    click.canonicalHref &&
+    (hasNamedIconEvidence || hasAnonymousStructuralIconEvidence)
   ) {
     candidates.push(
       baseCandidate(
@@ -272,6 +280,10 @@ export function generateLocatorCandidates(
         {
           strategy: "row-icon-context",
           rowText: stableRowText,
+          rowTexts: stableRowTexts,
+          rowIndex: click.table.rowIndex,
+          columnIndex: click.table.columnIndex,
+          iconTag: click.icon.tag,
           ...(click.table.headers[click.table.columnIndex]
             ? {
                 columnHeader: click.table.headers[click.table.columnIndex],
@@ -284,10 +296,12 @@ export function generateLocatorCandidates(
             ? { canonicalHref: click.canonicalHref }
             : {}),
         },
-        `row(${JSON.stringify(stableRowText)}).clickable-icon`,
+        `row(<captured-structure>).cell(${click.table.columnIndex}).clickable-icon`,
         0.99,
         0.97,
-        "Table row content, column header, icon identity and canonical link agree.",
+        hasNamedIconEvidence
+          ? "Table row content, column header, icon identity and canonical link agree."
+          : "Table row content, demonstrated column, anonymous icon tag and canonical link agree.",
         order++,
       ),
     );
@@ -429,10 +443,23 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
     const iconSelector = iconEvidenceSelector(rule);
     let scope: Locator = root.locator(hrefSelector);
     if (rule.strategy === "row-icon-context") {
-      if (!rule.rowText)
+      const rowTexts =
+        rule.rowTexts && rule.rowTexts.length > 0
+          ? rule.rowTexts
+          : rule.rowText
+            ? [rule.rowText]
+            : [];
+      if (rowTexts.length === 0 && rule.rowIndex === undefined)
         throw new Error("Row/icon locator is missing captured row text.");
-      const row = root.locator("tr").filter({ hasText: rule.rowText });
-      scope = row.locator(hrefSelector);
+      let row = root.locator("tr");
+      for (const rowText of rowTexts) row = row.filter({ hasText: rowText });
+      if (rowTexts.length === 0 && rule.rowIndex !== undefined)
+        row = row.nth(rule.rowIndex);
+      const rowScope =
+        rule.columnIndex === undefined
+          ? row
+          : row.locator(":scope > th, :scope > td").nth(rule.columnIndex);
+      scope = rowScope.locator(hrefSelector);
     }
     return iconSelector
       ? scope.filter({ has: root.locator(iconSelector) })
@@ -479,6 +506,8 @@ function iconEvidenceSelector(rule: LocatorRule) {
     const canonical = escapeForAttribute(`${url.origin}${url.pathname || "/"}`);
     return `img[src^="${pathname}"],img[src^="${canonical}"]`;
   }
+  if (rule.iconTag && /^[a-z][a-z0-9-]*$/.test(rule.iconTag))
+    return rule.iconTag;
   return undefined;
 }
 
@@ -627,8 +656,7 @@ export function validateCapturedLocatorCandidates(
               : candidate.strategy === "icon-evidence"
                 ? (target.clickEvidence?.captureValidation.iconMatchCount ?? 0)
                 : candidate.strategy === "row-icon-context"
-                  ? (target.clickEvidence?.captureValidation
-                      .rowIconMatchCount ?? 0)
+                  ? capturedRowContextMatchCount(target)
                   : ["form-control-name", "stable-attribute"].includes(
                         candidate.strategy,
                       )
@@ -646,6 +674,26 @@ export function validateCapturedLocatorCandidates(
       });
     }),
   );
+}
+
+function capturedRowContextMatchCount(target: DemonstratedTarget) {
+  const click = target.clickEvidence;
+  const recordedCount = click?.captureValidation.rowIconMatchCount ?? 0;
+  if (recordedCount > 0) return recordedCount;
+  const icon = click?.icon;
+  const hasNamedIconEvidence = Boolean(
+    icon && (icon.alt || icon.title || icon.src),
+  );
+  if (
+    !hasNamedIconEvidence &&
+    icon?.tag &&
+    click?.canonicalHref &&
+    click.table?.rowText.some(Boolean) &&
+    target.captureValidation.exactTargetConnected &&
+    target.descriptor?.rawTargetPromoted
+  )
+    return 1;
+  return 0;
 }
 
 export function rankLocatorCandidates(candidates: LocatorCandidate[]) {

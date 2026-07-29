@@ -639,13 +639,30 @@ const RECORDER_INIT_SCRIPT = `(() => {
           .filter(iconMatches).length
       : 0;
     const rowIconMatchCount = row && icon
-      ? Array.from(document.querySelectorAll('tr')).filter(candidateRow => {
+      ? Array.from(document.querySelectorAll('tr')).reduce((count, candidateRow) => {
           const candidateTexts = Array.from(candidateRow.querySelectorAll(':scope > th,:scope > td'))
             .map(node => staticInterfaceText(node.textContent))
             .filter(Boolean);
           const sameRow = rowText.length > 0 && rowText.every(value => candidateTexts.includes(value));
-          return sameRow && Array.from(candidateRow.querySelectorAll('a img,a svg,a [role=img]')).some(iconMatches);
-        }).length
+          if (!sameRow) return count;
+          const candidateCells = Array.from(candidateRow.querySelectorAll(':scope > th,:scope > td'));
+          const candidateCell = candidateCells[Math.max(0, cells.indexOf(cell))];
+          if (!candidateCell) return count;
+          const candidateLinks = Array.from(candidateCell.querySelectorAll('a[href],a[onclick],[role=link]'));
+          return count + candidateLinks.filter(candidateLink => {
+            if (
+              canonicalHref &&
+              canonicalUrl(candidateLink.href || candidateLink.getAttribute('href')) !== canonicalHref
+            ) return false;
+            const candidateIcons = Array.from(candidateLink.querySelectorAll('img,svg,use,i,[role=img]'));
+            if (iconAlt || iconTitle || canonicalIconSrc) {
+              return candidateIcons.some(iconMatches);
+            }
+            return candidateIcons.some(candidateIcon =>
+              candidateIcon.tagName.toLowerCase() === icon.tagName.toLowerCase()
+            );
+          }).length;
+        }, 0)
       : 0;
     const clickEvidence = {
       rawTarget: {

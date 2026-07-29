@@ -487,7 +487,14 @@ export const LocatorRuleSchema = z.object({
   iconAlt: z.string().optional(),
   iconTitle: z.string().optional(),
   iconSrc: z.string().optional(),
+  iconTag: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]*$/)
+    .optional(),
   rowText: z.string().optional(),
+  rowTexts: z.array(z.string()).max(12).optional(),
+  rowIndex: z.number().int().nonnegative().optional(),
+  columnIndex: z.number().int().nonnegative().optional(),
   columnHeader: z.string().optional(),
   sequencePreviousActionId: z.string().optional(),
   controlFamily:

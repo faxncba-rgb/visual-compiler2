@@ -520,6 +520,41 @@ export function renderMultiDocumentStays() {
   </article></main></body></html>`;
 }
 
+export function renderAnonymousIconConsultations() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Consultations synthétiques · icône anonyme</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS ICON WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Consultations</h1></div>
+  <p>Parcours synthétique sans donnée réelle.</p>
+  <a href="/fixture/anonymous-icon/sejours.cgi" data-vc-action="open-stays">Ouvrir les séjours</a>
+  </article></main></body></html>`;
+}
+
+export function renderAnonymousIconStays() {
+  const headers = Array.from(
+    { length: 12 },
+    (_, index) => `<th>Colonne ${index + 1}</th>`,
+  ).join("");
+  const rows = Array.from({ length: 8 }, (_, rowIndex) => {
+    const cells = Array.from({ length: 12 }, (_, columnIndex) => {
+      if (columnIndex === 10)
+        return `<td><a href="/fixture/anonymous-icon/codage_etage.cgi?stay=${rowIndex + 1}"><i class="anonymous-coding-icon"></i></a></td>`;
+      return `<td>Repère ${rowIndex + 1}-${columnIndex + 1}</td>`;
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Séjours synthétiques · icône anonyme</title>
+  <style>${baseStyles}
+    table{width:100%;border-collapse:collapse}th,td{padding:6px;border:1px solid #c7d2cc;text-align:left}
+    .anonymous-coding-icon{display:block;width:20px;height:20px;border-radius:50%;background:#185a45;cursor:pointer}
+    .anonymous-coding-icon::before{content:"";display:block;width:7px;height:7px;margin:6px;border-top:2px solid white;border-right:2px solid white}
+  </style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS ICON WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Séjours</h1></div>
+  <table aria-label="Séjours synthétiques"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>
+  </article></main></body></html>`;
+}
+
 export function renderMultiDocumentCoding() {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage étage synthétique</title>
   <style>${baseStyles}</style></head><body>

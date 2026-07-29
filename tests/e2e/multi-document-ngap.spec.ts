@@ -252,3 +252,111 @@ test("three documents, anonymous icon and c → Enter selection compile and reru
     },
   );
 });
+
+test("anonymous <i> is resolved by its row and column among eight canonical links", async () => {
+  const consultationsPath = "/fixture/anonymous-icon/consultations.cgi";
+  const staysPath = "/fixture/anonymous-icon/sejours.cgi";
+  const codingPath = "/fixture/anonymous-icon/codage_etage.cgi";
+
+  await withManagedBrowser(
+    `${fixtureOrigin}${consultationsPath}`,
+    async ({ browser, page, recorder }) => {
+      await recorder.start();
+
+      await page
+        .getByRole("link", { name: "Ouvrir les séjours", exact: true })
+        .click();
+      await page.waitForURL(`**${staysPath}`);
+      await expect(page.locator(`a[href^="${codingPath}"]`)).toHaveCount(8);
+      await page
+        .locator("tbody tr")
+        .nth(2)
+        .locator("td")
+        .nth(10)
+        .locator("i")
+        .click();
+      await page.waitForURL(`**${codingPath}?stay=3`);
+
+      const select = page.getByLabel("Acte NGAP", { exact: true });
+      await select.selectOption("214");
+      await page
+        .getByRole("button", {
+          name: "Ajouter un code NGAP",
+          exact: true,
+        })
+        .click();
+      await expect(
+        page.getByText("Code NGAP 214 ajouté.", { exact: true }),
+      ).toBeVisible();
+
+      const session = await recorder.stop();
+      const iconClick = session.actions.find(
+        (action) =>
+          action.target?.clickEvidence?.canonicalHref ===
+          `${fixtureOrigin}${codingPath}`,
+      );
+      expect(iconClick).toMatchObject({
+        action: "click",
+        beforeState: { pathname: staysPath },
+        target: {
+          descriptor: { rawTargetPromoted: true },
+          clickEvidence: {
+            rawTarget: { tag: "i" },
+            normalizedClickable: { tag: "a", role: "link" },
+            icon: { tag: "i" },
+            canonicalHref: `${fixtureOrigin}${codingPath}`,
+            table: {
+              rowIndex: 3,
+              columnIndex: 10,
+            },
+            captureValidation: {
+              canonicalHrefMatchCount: 8,
+              iconMatchCount: 0,
+              rowIconMatchCount: 1,
+            },
+          },
+        },
+      });
+      expect(iconClick?.target?.clickEvidence?.icon?.alt).toBeUndefined();
+      expect(iconClick?.target?.clickEvidence?.icon?.title).toBeUndefined();
+      expect(iconClick?.target?.clickEvidence?.icon?.src).toBeUndefined();
+
+      const { workflow } = await compileDemonstration({
+        session,
+        graph: browser.graph,
+        localValues: recorder.localValues,
+        provider: new MockGeneralizationProvider(),
+      });
+      const iconStep = workflow.steps.find(
+        (step) => step.sourceActionId === iconClick?.id,
+      );
+      expect(
+        iconStep?.locatorCandidates.find(
+          (candidate) => candidate.id === iconStep.selectedLocatorId,
+        ),
+      ).toMatchObject({
+        strategy: "row-icon-context",
+        matchCount: 1,
+        visibleCount: 1,
+        enabledCount: 1,
+        typeCompatibleCount: 1,
+      });
+
+      for (let run = 0; run < 2; run += 1) {
+        await browser.navigate(`${fixtureOrigin}${consultationsPath}`);
+        const telemetry = await new DeterministicRuntime({
+          context: browser.context,
+          workflow,
+          variables: {},
+          mode: "local",
+        }).run();
+        expect(telemetry.state, telemetry.error).toBe("Passed");
+        expect(telemetry.llmCalls).toBe(0);
+        expect(telemetry.openAIRequests).toBe(0);
+        await expect(
+          page.getByText("Code NGAP 214 ajouté.", { exact: true }),
+        ).toBeVisible();
+      }
+    },
+  );
+});

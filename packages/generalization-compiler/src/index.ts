@@ -1094,7 +1094,14 @@ async function compileSteps(
                 enrichment.recommendedLocator.selectorPreview,
           )
         : undefined;
-      const selectionPool = recommended ? [recommended] : candidates;
+      const selectionPool = recommended
+        ? [
+            recommended,
+            ...candidates.filter(
+              (candidate) => candidate.id !== recommended.id,
+            ),
+          ]
+        : candidates;
       const selected = selectDemonstratedLocator(selectionPool, {
         requireEditable: ["fill", "select"].includes(action.action),
         target: action.target,
@@ -1407,12 +1414,30 @@ function generatedLocator(
               return `img[src^=${JSON.stringify(icon.pathname)}],img[src^=${JSON.stringify(`${icon.origin}${icon.pathname}`)}]`;
             })()
           : undefined;
-    const scope =
-      rule.strategy === "row-icon-context"
-        ? `${root}.locator('tr').filter({ hasText: ${JSON.stringify(rule.rowText)} }).locator(${JSON.stringify(hrefSelector)})`
-        : `${root}.locator(${JSON.stringify(hrefSelector)})`;
-    return iconSelector
-      ? `${scope}.filter({ has: ${root}.locator(${JSON.stringify(iconSelector)}) })`
+    let scope = `${root}.locator(${JSON.stringify(hrefSelector)})`;
+    if (rule.strategy === "row-icon-context") {
+      const rowTexts =
+        rule.rowTexts && rule.rowTexts.length > 0
+          ? rule.rowTexts
+          : rule.rowText
+            ? [rule.rowText]
+            : [];
+      let row = `${root}.locator('tr')`;
+      for (const rowText of rowTexts)
+        row = `${row}.filter({ hasText: ${JSON.stringify(rowText)} })`;
+      if (rowTexts.length === 0 && rule.rowIndex !== undefined)
+        row = `${row}.nth(${rule.rowIndex})`;
+      if (rule.columnIndex !== undefined)
+        row = `${row}.locator(':scope > th, :scope > td').nth(${rule.columnIndex})`;
+      scope = `${row}.locator(${JSON.stringify(hrefSelector)})`;
+    }
+    const structuralIconSelector =
+      !iconSelector && rule.iconTag && /^[a-z][a-z0-9-]*$/.test(rule.iconTag)
+        ? rule.iconTag
+        : undefined;
+    const effectiveIconSelector = iconSelector ?? structuralIconSelector;
+    return effectiveIconSelector
+      ? `${scope}.filter({ has: ${root}.locator(${JSON.stringify(effectiveIconSelector)}) })`
       : scope;
   }
   return `${root}.locator(${JSON.stringify(rule.structuralPath ?? candidate.selectorPreview)})`;

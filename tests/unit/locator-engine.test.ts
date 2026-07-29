@@ -37,6 +37,61 @@ function saveTarget() {
   return value;
 }
 
+function anonymousIconTarget() {
+  const value = target();
+  value.tag = "a";
+  value.role = "link";
+  delete value.accessibleName;
+  delete value.associatedLabel;
+  value.editable = false;
+  const descriptor: NonNullable<typeof value.descriptor> = {
+    ...value.descriptor!,
+    controlFamily: "link",
+    multiline: false,
+    editable: false,
+    actionCompatibility: ["click"],
+    tag: "a",
+    role: "link",
+    hasOnclick: false,
+    rawTargetPromoted: true,
+  };
+  delete descriptor.accessibleName;
+  delete descriptor.associatedLabel;
+  value.descriptor = descriptor;
+  value.clickEvidence = {
+    rawTarget: {
+      tag: "i",
+      structuralPath:
+        "html > body > table > tbody > tr:nth-of-type(3) > td:nth-of-type(11) > a > i",
+    },
+    normalizedClickable: {
+      tag: "a",
+      role: "link",
+      structuralPath:
+        "html > body > table > tbody > tr:nth-of-type(3) > td:nth-of-type(11) > a",
+    },
+    icon: { tag: "i" },
+    canonicalHref: "https://synthetic.invalid/saisie/codage_etage.cgi",
+    table: {
+      rowIndex: 3,
+      columnIndex: 10,
+      headers: Array.from({ length: 12 }, (_, index) => `Colonne ${index + 1}`),
+      rowText: ["Repère 3-1", "Repère 3-2", "Repère 3-3"],
+    },
+    domRelations: ["raw-descendant-of-normalized", "a>a"],
+    structuralSnapshot: [
+      "html > body > table > tbody > tr:nth-of-type(3) > td:nth-of-type(11) > a > i",
+      "html > body > table > tbody > tr:nth-of-type(3) > td:nth-of-type(11) > a",
+    ],
+    captureValidation: {
+      canonicalHrefMatchCount: 8,
+      iconMatchCount: 0,
+      rowIconMatchCount: 0,
+    },
+  };
+  return value;
+}
+
 describe("demonstration-first locator engine", () => {
   it("preserves the exact consultation editor instead of choosing the first textbox", () => {
     const candidates = generateLocatorCandidates(target());
@@ -272,5 +327,54 @@ describe("demonstration-first locator engine", () => {
         { target: saveTarget(), action: "click" },
       ),
     ).toThrow("no unique");
+  });
+
+  it("uses row and column evidence for an anonymous <i> among eight canonical href matches", () => {
+    const demonstratedTarget = anonymousIconTarget();
+    const candidates = generateLocatorCandidates(demonstratedTarget);
+    const canonical = candidates.find(
+      (entry) => entry.strategy === "canonical-href",
+    );
+    const rowContext = candidates.find(
+      (entry) => entry.strategy === "row-icon-context",
+    );
+
+    expect(rowContext).toMatchObject({
+      rule: {
+        strategy: "row-icon-context",
+        rowIndex: 3,
+        columnIndex: 10,
+        iconTag: "i",
+        canonicalHref: "https://synthetic.invalid/saisie/codage_etage.cgi",
+      },
+      selectorPreview: "row(<captured-structure>).cell(10).clickable-icon",
+    });
+    expect(rowContext?.selectorPreview).not.toContain("Repère");
+
+    const validated = validateCapturedLocatorCandidates(
+      demonstratedTarget,
+      candidates,
+    );
+    expect(validated.find((entry) => entry.id === canonical?.id)).toMatchObject(
+      {
+        matchCount: 8,
+        unique: false,
+      },
+    );
+    expect(
+      validated.find((entry) => entry.id === rowContext?.id),
+    ).toMatchObject({
+      matchCount: 1,
+      visibleCount: 1,
+      enabledCount: 1,
+      typeCompatibleCount: 1,
+      unique: true,
+    });
+    expect(
+      selectDemonstratedLocator(validated, {
+        target: demonstratedTarget,
+        action: "click",
+      }).strategy,
+    ).toBe("row-icon-context");
   });
 });
