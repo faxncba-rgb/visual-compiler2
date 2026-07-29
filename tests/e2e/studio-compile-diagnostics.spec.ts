@@ -171,6 +171,72 @@ test("Studio compiles and replays click → c → Enter → Valider through mock
   }, "/fixture/keyboard-validation");
 });
 
+test("Studio reconciles a completed compilation while the POST response is delayed", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await page.goto(studioOrigin);
+    await page
+      .getByRole("button", { name: "Start teaching", exact: true })
+      .click();
+    await controller.browser.mainPage
+      .getByRole("button", {
+        name: "Choisir une catégorie",
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole("button", { name: "Stop teaching", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "DEMONSTRATION_REVIEW",
+      { timeout: 15_000 },
+    );
+    const workflowName = "Delayed compilation response";
+    await page.getByLabel("Workflow name", { exact: true }).fill(workflowName);
+
+    let releaseCompileResponse = () => {};
+    const compileResponseGate = new Promise<void>((resolve) => {
+      releaseCompileResponse = resolve;
+    });
+    let markBackendResponseObserved = () => {};
+    const backendResponseObserved = new Promise<void>((resolve) => {
+      markBackendResponseObserved = resolve;
+    });
+    let markRouteFinished = () => {};
+    const routeFinished = new Promise<void>((resolve) => {
+      markRouteFinished = resolve;
+    });
+    await page.route("**/api/compile", async (route) => {
+      const response = await route.fetch();
+      markBackendResponseObserved();
+      await compileResponseGate;
+      await route.fulfill({ response });
+      markRouteFinished();
+    });
+
+    await page.getByRole("button", { name: "Compile", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("COMPILING");
+    await backendResponseObserved;
+    expect(controller.machine.state).toBe("READY_TO_RUN");
+
+    try {
+      await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN", {
+        timeout: 8_000,
+      });
+      await expect(
+        page.getByRole("button", { name: "Run locally", exact: true }),
+      ).toBeEnabled();
+      await expect(
+        page.getByLabel("Saved workflows", { exact: true }),
+      ).toContainText(`${workflowName} · v1`);
+    } finally {
+      releaseCompileResponse();
+      await routeFinished;
+    }
+  }, "/fixture/keyboard-validation");
+});
+
 async function closeStudioServer(server: Server, controller: StudioController) {
   await controller.browser.close().catch(() => undefined);
   const closed = new Promise<void>((resolve) => server.close(() => resolve()));

@@ -2,6 +2,9 @@ const $ = (selector) => document.querySelector(selector);
 
 let state;
 let requestInFlight = false;
+let activeRequest;
+let requestSequence = 0;
+let refreshInFlight = false;
 let toastTimer;
 let lastRunMode = "local";
 
@@ -375,7 +378,8 @@ function renderButtons() {
     executableActionCount(state?.session) === 0 ||
     !state?.capabilities?.aiCompilationAvailable ||
     requestInFlight;
-  $("#compile").textContent = "Compile";
+  $("#compile").textContent =
+    current === "COMPILING" ? "Compiling…" : "Compile";
   $("#localRun").disabled = !state?.workflow || !runnable || requestInFlight;
   $("#animatedRun").disabled = !state?.workflow || !runnable || requestInFlight;
   $("#runAgain").disabled =
@@ -479,11 +483,26 @@ function adoptDiagnostic(error) {
 }
 
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   try {
     state = await api("/api/state", { method: "GET" });
+    const compilationFinished =
+      activeRequest?.kind === "compile" &&
+      (state.state === "READY_TO_RUN" ||
+        (state.state === "DEMONSTRATION_REVIEW" &&
+          Boolean(state.diagnostic ?? state.compilationDiagnostic)));
+    if (compilationFinished) {
+      activeRequest = undefined;
+      requestInFlight = false;
+      if (state.state === "READY_TO_RUN")
+        toast("GPT-5.6 Semantic IR compiled; local artifact ready to run.");
+    }
     render();
   } catch {
     // A failed refresh must not replace or hide the last persistent diagnostic.
+  } finally {
+    refreshInFlight = false;
   }
 }
 
@@ -505,23 +524,37 @@ async function mutate(path, body, successMessage, method = "POST") {
 }
 
 async function compileWorkflow() {
+  const instruction = $("#generalizationInstruction").value;
+  const workflowName = $("#workflowName").value;
+  const request = {
+    id: ++requestSequence,
+    kind: "compile",
+  };
+  activeRequest = request;
   requestInFlight = true;
-  renderButtons();
+  if (state) state = { ...state, state: "COMPILING" };
+  render();
   try {
-    state = await api("/api/compile", {
+    const compiledState = await api("/api/compile", {
       body: {
-        instruction: $("#generalizationInstruction").value,
-        workflowName: $("#workflowName").value,
+        instruction,
+        workflowName,
       },
     });
+    if (activeRequest?.id !== request.id) return;
+    state = compiledState;
     render();
     toast("GPT-5.6 Semantic IR compiled; local artifact ready to run.");
   } catch (error) {
+    if (activeRequest?.id !== request.id) return;
     adoptDiagnostic(error);
     await refresh();
   } finally {
-    requestInFlight = false;
-    renderButtons();
+    if (activeRequest?.id === request.id) {
+      activeRequest = undefined;
+      requestInFlight = false;
+      renderButtons();
+    }
   }
 }
 
@@ -629,5 +662,10 @@ $("#generalizationInstruction").addEventListener("input", () => {
 
 await refresh();
 setInterval(() => {
-  if (!requestInFlight || state?.state === "RUNNING") void refresh();
+  if (
+    !requestInFlight ||
+    activeRequest?.kind === "compile" ||
+    state?.state === "RUNNING"
+  )
+    void refresh();
 }, 900);
