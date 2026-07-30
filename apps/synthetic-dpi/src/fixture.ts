@@ -602,21 +602,41 @@ export function renderAnonymousDescendantPlanning(url?: URL) {
   </article></main></body></html>`;
 }
 
-export function renderAnonymousDescendantAnesthesia() {
+export function renderAnonymousDescendantAnesthesia(url?: URL) {
+  if (url?.searchParams.get("done") === "1") {
+    return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage synthétique validé</title>
+    <style>${baseStyles}</style></head><body>
+    <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS DESCENDANT WORKFLOW ONLY</div>
+    <main><article class="record"><div class="record-title"><h1>Codage synthétique</h1></div>
+    <p role="status" data-vc-outcome="success" class="status success">Codage synthétique validé.</p>
+    </article></main></body></html>`;
+  }
+  const rows = Array.from({ length: 2 }, (_, rowIndex) => {
+    const cells = Array.from({ length: 7 }, (_, columnIndex) => {
+      if (columnIndex === 6) {
+        const target = rowIndex === 1;
+        return `<td><a href="/fixture/row-descendant/anesthesie.cgi?done=1&row=${rowIndex + 1}"><img ${target ? 'data-runtime-mutable="true"' : ""} title="${target ? "Valider la ligne" : "Autre ligne"}" src="/fixture/assets/${target ? "validate-row" : "other-row"}.png" width="20" height="20"></a></td>`;
+      }
+      return `<td>Codage ${rowIndex + 1}-${columnIndex + 1}</td>`;
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage synthétique</title>
-  <style>${baseStyles}</style></head><body>
+  <style>${baseStyles} table{width:100%;border-collapse:collapse}th,td{padding:6px;border:1px solid #c7d2cc;text-align:left}</style></head><body>
   <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS DESCENDANT WORKFLOW ONLY</div>
   <main><article class="record"><div class="record-title"><h1>Codage synthétique</h1></div>
-  <button type="button" data-vc-action="validate-coding">Valider codage</button>
-  <p role="status" data-vc-outcome="pending">Codage en attente.</p>
-  </article></main>
+  <table aria-label="Codages synthétiques"><thead><tr>${Array.from({ length: 7 }, (_, index) => `<th>Champ ${index + 1}</th>`).join("")}</tr></thead>
+  <tbody>${rows}</tbody></table></article></main>
   <script>
-    document.querySelector('[data-vc-action=validate-coding]').addEventListener('click', () => {
-      const status = document.querySelector('[data-vc-outcome]');
-      status.dataset.vcOutcome = 'success';
-      status.className = 'status success';
-      status.textContent = 'Codage synthétique validé.';
-    });
+    const visits = Number(sessionStorage.getItem('vc-row-descendant-visits') || '0');
+    sessionStorage.setItem('vc-row-descendant-visits', String(visits + 1));
+    if (visits > 0) {
+      const mutable = document.querySelector('[data-runtime-mutable]');
+      mutable.title = 'Action actualisée';
+      mutable.src = '/fixture/assets/updated-row.png';
+      Array.from(mutable.closest('tr').querySelectorAll('td:not(:last-child)'))
+        .forEach((cell, index) => { cell.textContent = 'Valeur actualisée ' + (index + 1); });
+    }
   </script></body></html>`;
 }
 

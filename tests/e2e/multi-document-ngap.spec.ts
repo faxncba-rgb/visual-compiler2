@@ -450,8 +450,13 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
       await page.waitForURL(`**${anesthesiaPath}`);
       await expect(page.locator(`a[href="${anesthesiaPath}"]`)).toHaveCount(0);
       await page
-        .getByRole("button", { name: "Valider codage", exact: true })
+        .locator("tbody tr")
+        .nth(1)
+        .locator("td")
+        .nth(6)
+        .locator("img")
         .click();
+      await page.waitForURL(`**${anesthesiaPath}?done=1&row=2`);
       await expect(
         page.getByText("Codage synthétique validé.", { exact: true }),
       ).toBeVisible();
@@ -465,6 +470,10 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
         (action) =>
           action.target?.clickEvidence?.canonicalHref ===
           `${fixtureOrigin}${anesthesiaPath}`,
+      );
+      const namedIconClick = session.actions.find(
+        (action) =>
+          action.target?.clickEvidence?.icon?.title === "Valider la ligne",
       );
       expect(descendantClick).toMatchObject({
         action: "click",
@@ -485,6 +494,26 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
               iconMatchCount: 0,
               rowIconMatchCount: 0,
               rowClickableMatchCount: 1,
+            },
+          },
+        },
+      });
+      expect(namedIconClick).toMatchObject({
+        action: "click",
+        beforeState: { pathname: anesthesiaPath },
+        target: {
+          clickEvidence: {
+            rawTarget: { tag: "img" },
+            normalizedClickable: { tag: "a", role: "link" },
+            icon: {
+              tag: "img",
+              title: "Valider la ligne",
+              src: `${fixtureOrigin}/fixture/assets/validate-row.png`,
+            },
+            canonicalHref: `${fixtureOrigin}${anesthesiaPath}`,
+            table: {
+              rowIndex: 2,
+              columnIndex: 6,
             },
           },
         },
@@ -511,6 +540,17 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
         typeCompatibleCount: 1,
         unique: true,
       });
+      const namedIconStep = workflow.steps.find(
+        (step) => step.sourceActionId === namedIconClick?.id,
+      );
+      expect(
+        namedIconStep?.locatorCandidates.find(
+          (candidate) => candidate.id === namedIconStep.selectedLocatorId,
+        ),
+      ).toMatchObject({
+        strategy: "row-icon-context",
+        unique: true,
+      });
 
       for (let run = 0; run < 2; run += 1) {
         const telemetry = await new DeterministicRuntime({
@@ -525,6 +565,12 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
         expect(telemetry.steps[0]).toMatchObject({
           action: "focus",
           status: "passed",
+        });
+        expect(
+          telemetry.steps.find((entry) => entry.stepId === namedIconStep?.id),
+        ).toMatchObject({
+          status: "passed",
+          locatorStrategy: "same-row-column",
         });
         await expect(
           page.getByText("Codage synthétique validé.", { exact: true }),

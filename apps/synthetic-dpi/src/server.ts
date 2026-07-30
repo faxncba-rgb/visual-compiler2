@@ -79,7 +79,7 @@ export function createSyntheticDpiServer() {
     if (url.pathname === "/fixture/row-descendant/planning.cgi")
       return html(response, renderAnonymousDescendantPlanning(url));
     if (url.pathname === "/fixture/row-descendant/anesthesie.cgi")
-      return html(response, renderAnonymousDescendantAnesthesia());
+      return html(response, renderAnonymousDescendantAnesthesia(url));
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("Synthetic fixture not found");
   });

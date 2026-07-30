@@ -166,12 +166,48 @@ function runtimeLocatorAttempts(step: CompiledStep) {
   for (const candidate of ranked) {
     attempts.push({ candidate, rule: candidate.rule });
     const rule = candidate.rule;
+    const iconEvidenceEntries: Array<
+      ["iconAlt" | "iconTitle" | "iconSrc", string | undefined]
+    > = [
+      ["iconAlt", rule.iconAlt],
+      ["iconTitle", rule.iconTitle],
+      ["iconSrc", rule.iconSrc],
+    ];
+    const namedIconEvidence = iconEvidenceEntries.filter(
+      (entry): entry is ["iconAlt" | "iconTitle" | "iconSrc", string] =>
+        Boolean(entry[1]),
+    );
+    if (namedIconEvidence.length > 1) {
+      for (const [retainedKey] of namedIconEvidence) {
+        attempts.push({
+          candidate,
+          rule: {
+            ...rule,
+            iconAlt: retainedKey === "iconAlt" ? rule.iconAlt : undefined,
+            iconTitle: retainedKey === "iconTitle" ? rule.iconTitle : undefined,
+            iconSrc: retainedKey === "iconSrc" ? rule.iconSrc : undefined,
+          },
+        });
+      }
+    }
     const anonymousStructuralIcon =
       rule.strategy === "row-icon-context" &&
       Boolean(rule.iconTag) &&
       !rule.iconAlt &&
       !rule.iconTitle &&
       !rule.iconSrc;
+    const rowWithoutIconIdentity =
+      (rule.strategy === "row-icon-context" ||
+        rule.strategy === "same-row-column") &&
+      namedIconEvidence.length > 0
+        ? {
+            ...rule,
+            iconAlt: undefined,
+            iconTitle: undefined,
+            iconSrc: undefined,
+            iconTag: undefined,
+          }
+        : undefined;
     const rowTexts =
       rule.strategy === "row-icon-context" ||
       rule.strategy === "row-clickable-context"
@@ -185,6 +221,9 @@ function runtimeLocatorAttempts(step: CompiledStep) {
           iconTag: undefined,
         },
       });
+    }
+    if (rowWithoutIconIdentity) {
+      attempts.push({ candidate, rule: rowWithoutIconIdentity });
     }
     if (rowTexts.length > 1) {
       for (
@@ -211,6 +250,16 @@ function runtimeLocatorAttempts(step: CompiledStep) {
               rowText: retainedRowTexts[0],
               rowTexts: retainedRowTexts,
               iconTag: undefined,
+            },
+          });
+        }
+        if (rowWithoutIconIdentity) {
+          attempts.push({
+            candidate,
+            rule: {
+              ...rowWithoutIconIdentity,
+              rowText: retainedRowTexts[0],
+              rowTexts: retainedRowTexts,
             },
           });
         }
