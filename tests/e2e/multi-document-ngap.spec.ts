@@ -427,3 +427,102 @@ test("anonymous <i> is resolved by its row and column among eight canonical link
     },
   );
 });
+
+test("anonymous <em> descendant is resolved in its captured row after its link disappears", async () => {
+  const planningPath = "/fixture/row-descendant/planning.cgi";
+  const anesthesiaPath = "/fixture/row-descendant/anesthesie.cgi";
+
+  await withManagedBrowser(
+    `${fixtureOrigin}${planningPath}`,
+    async ({ browser, page, recorder }) => {
+      await recorder.start();
+
+      await expect(page.locator(`a[href="${anesthesiaPath}"]`)).toHaveCount(2);
+      await page
+        .locator("tbody tr")
+        .nth(1)
+        .locator("td")
+        .nth(12)
+        .locator("em")
+        .click();
+      await page.waitForURL(`**${anesthesiaPath}`);
+      await expect(page.locator(`a[href="${anesthesiaPath}"]`)).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "Valider codage", exact: true })
+        .click();
+      await expect(
+        page.getByText("Codage synthétique validé.", { exact: true }),
+      ).toBeVisible();
+
+      const session = await recorder.stop();
+      const descendantClick = session.actions.find(
+        (action) =>
+          action.target?.clickEvidence?.canonicalHref ===
+          `${fixtureOrigin}${anesthesiaPath}`,
+      );
+      expect(descendantClick).toMatchObject({
+        action: "click",
+        beforeState: { pathname: planningPath },
+        target: {
+          descriptor: { rawTargetPromoted: true },
+          clickEvidence: {
+            rawTarget: { tag: "em" },
+            normalizedClickable: { tag: "a", role: "link" },
+            icon: undefined,
+            canonicalHref: `${fixtureOrigin}${anesthesiaPath}`,
+            table: {
+              rowIndex: 2,
+              columnIndex: 12,
+            },
+            captureValidation: {
+              canonicalHrefMatchCount: 2,
+              iconMatchCount: 0,
+              rowIconMatchCount: 0,
+              rowClickableMatchCount: 1,
+            },
+          },
+        },
+      });
+
+      const { workflow } = await compileDemonstration({
+        session,
+        graph: browser.graph,
+        localValues: recorder.localValues,
+        provider: new MockGeneralizationProvider(),
+      });
+      const descendantStep = workflow.steps.find(
+        (step) => step.sourceActionId === descendantClick?.id,
+      );
+      expect(
+        descendantStep?.locatorCandidates.find(
+          (candidate) => candidate.id === descendantStep.selectedLocatorId,
+        ),
+      ).toMatchObject({
+        strategy: "row-clickable-context",
+        matchCount: 1,
+        visibleCount: 1,
+        enabledCount: 1,
+        typeCompatibleCount: 1,
+        unique: true,
+      });
+
+      for (let run = 0; run < 2; run += 1) {
+        await browser.navigate(
+          `${fixtureOrigin}${planningPath}${run === 0 ? "?variant=runtime" : ""}`,
+        );
+        const telemetry = await new DeterministicRuntime({
+          context: browser.context,
+          workflow,
+          variables: {},
+          mode: "local",
+        }).run();
+        expect(telemetry.state, telemetry.error).toBe("Passed");
+        expect(telemetry.llmCalls).toBe(0);
+        expect(telemetry.openAIRequests).toBe(0);
+        await expect(
+          page.getByText("Codage synthétique validé.", { exact: true }),
+        ).toBeVisible();
+      }
+    },
+  );
+});

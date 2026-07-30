@@ -1,5 +1,7 @@
 import { createServer, type Server } from "node:http";
 import {
+  renderAnonymousDescendantAnesthesia,
+  renderAnonymousDescendantPlanning,
   renderAnonymousIconConsultations,
   renderAnonymousIconStays,
   renderCrossOriginFrame,
@@ -74,6 +76,10 @@ export function createSyntheticDpiServer() {
       return html(response, renderAnonymousIconStays(url));
     if (url.pathname === "/fixture/anonymous-icon/codage_etage.cgi")
       return html(response, renderMultiDocumentCoding(url));
+    if (url.pathname === "/fixture/row-descendant/planning.cgi")
+      return html(response, renderAnonymousDescendantPlanning(url));
+    if (url.pathname === "/fixture/row-descendant/anesthesie.cgi")
+      return html(response, renderAnonymousDescendantAnesthesia());
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("Synthetic fixture not found");
   });

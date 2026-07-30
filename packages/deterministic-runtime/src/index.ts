@@ -173,7 +173,8 @@ function runtimeLocatorAttempts(step: CompiledStep) {
       !rule.iconTitle &&
       !rule.iconSrc;
     const rowTexts =
-      rule.strategy === "row-icon-context"
+      rule.strategy === "row-icon-context" ||
+      rule.strategy === "row-clickable-context"
         ? (rule.rowTexts ?? (rule.rowText ? [rule.rowText] : []))
         : [];
     if (anonymousStructuralIcon) {
@@ -217,7 +218,8 @@ function runtimeLocatorAttempts(step: CompiledStep) {
     }
     if (
       !hasExplicitCoordinateFallback &&
-      rule.strategy === "row-icon-context" &&
+      (rule.strategy === "row-icon-context" ||
+        rule.strategy === "row-clickable-context") &&
       rule.rowIndex !== undefined &&
       rule.columnIndex !== undefined
     ) {

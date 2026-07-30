@@ -60,6 +60,7 @@ const strategyWeight: Record<LocatorCandidate["strategy"], number> = {
   "canonical-href": 0.96,
   "icon-evidence": 0.94,
   "row-icon-context": 0.98,
+  "row-clickable-context": 0.96,
   "stable-attribute": 0.72,
   "structural-fallback": 0.5,
   "bounding-box": 0.2,
@@ -333,6 +334,60 @@ export function generateLocatorCandidates(
       ),
     );
   }
+  if (
+    click?.table &&
+    stableRowText &&
+    !click.icon &&
+    click.canonicalHref &&
+    target.descriptor?.rawTargetPromoted
+  ) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "row-clickable-context",
+          rowText: stableRowText,
+          rowTexts: stableRowTexts,
+          rowIndex: click.table.rowIndex,
+          columnIndex: click.table.columnIndex,
+          ...(click.table.headers[click.table.columnIndex]
+            ? {
+                columnHeader: click.table.headers[click.table.columnIndex],
+              }
+            : {}),
+          ...(click.form?.name ? { formName: click.form.name } : {}),
+          canonicalHref: click.canonicalHref,
+        },
+        `row(<captured-structure>).cell(${click.table.columnIndex}).clickable`,
+        0.98,
+        0.96,
+        "Table row content, demonstrated column and canonical link identify the promoted clickable ancestor.",
+        order++,
+      ),
+    );
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "same-row-column",
+          rowIndex: click.table.rowIndex,
+          columnIndex: click.table.columnIndex,
+          ...(click.table.headers[click.table.columnIndex]
+            ? {
+                columnHeader: click.table.headers[click.table.columnIndex],
+              }
+            : {}),
+          ...(click.form?.name ? { formName: click.form.name } : {}),
+          canonicalHref: click.canonicalHref,
+        },
+        `table.row(${click.table.rowIndex}).cell(${click.table.columnIndex}).clickable`,
+        0.82,
+        0.72,
+        "Table-local demonstrated row and column plus canonical link remain deterministic when row text changes.",
+        order++,
+      ),
+    );
+  }
   for (const attribute of ["data-vc-field", "data-vc-action", "data-testid"]) {
     const attributeValue = target.stableAttributes[attribute];
     if (!attributeValue) continue;
@@ -463,6 +518,7 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
     rule.strategy === "canonical-href" ||
     rule.strategy === "icon-evidence" ||
     rule.strategy === "row-icon-context" ||
+    rule.strategy === "row-clickable-context" ||
     rule.strategy === "same-row-column"
   ) {
     const hrefSelector = rule.canonicalHref
@@ -472,14 +528,16 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
     let scope: Locator = root.locator(hrefSelector);
     if (
       rule.strategy === "row-icon-context" ||
+      rule.strategy === "row-clickable-context" ||
       rule.strategy === "same-row-column"
     ) {
+      const usesSemanticRow =
+        rule.strategy === "row-icon-context" ||
+        rule.strategy === "row-clickable-context";
       const rowTexts =
-        rule.strategy === "row-icon-context" &&
-        rule.rowTexts &&
-        rule.rowTexts.length > 0
+        usesSemanticRow && rule.rowTexts && rule.rowTexts.length > 0
           ? rule.rowTexts
-          : rule.strategy === "row-icon-context" && rule.rowText
+          : usesSemanticRow && rule.rowText
             ? [rule.rowText]
             : [];
       if (rowTexts.length === 0 && rule.rowIndex === undefined)
@@ -718,14 +776,19 @@ export function validateCapturedLocatorCandidates(
                   .canonicalHrefMatchCount ?? 0)
               : candidate.strategy === "icon-evidence"
                 ? (target.clickEvidence?.captureValidation.iconMatchCount ?? 0)
-                : candidate.strategy === "row-icon-context" ||
-                    candidate.strategy === "same-row-column"
+                : candidate.strategy === "row-icon-context"
                   ? capturedRowContextMatchCount(target)
-                  : ["form-control-name", "stable-attribute"].includes(
-                        candidate.strategy,
-                      )
-                    ? target.captureValidation.stableAttributeMatchCount
-                    : 1;
+                  : candidate.strategy === "row-clickable-context"
+                    ? capturedRowClickableMatchCount(target)
+                    : candidate.strategy === "same-row-column"
+                      ? target.clickEvidence?.icon
+                        ? capturedRowContextMatchCount(target)
+                        : capturedRowClickableMatchCount(target)
+                      : ["form-control-name", "stable-attribute"].includes(
+                            candidate.strategy,
+                          )
+                        ? target.captureValidation.stableAttributeMatchCount
+                        : 1;
       return LocatorCandidateSchema.parse({
         ...candidate,
         matchCount,
@@ -751,6 +814,20 @@ function capturedRowContextMatchCount(target: DemonstratedTarget) {
   if (
     !hasNamedIconEvidence &&
     icon?.tag &&
+    click?.canonicalHref &&
+    click.table?.rowText.some(Boolean) &&
+    target.captureValidation.exactTargetConnected &&
+    target.descriptor?.rawTargetPromoted
+  )
+    return 1;
+  return 0;
+}
+
+function capturedRowClickableMatchCount(target: DemonstratedTarget) {
+  const click = target.clickEvidence;
+  const recordedCount = click?.captureValidation.rowClickableMatchCount ?? 0;
+  if (recordedCount > 0) return recordedCount;
+  if (
     click?.canonicalHref &&
     click.table?.rowText.some(Boolean) &&
     target.captureValidation.exactTargetConnected &&

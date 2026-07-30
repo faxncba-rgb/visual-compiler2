@@ -92,6 +92,43 @@ function anonymousIconTarget() {
   return value;
 }
 
+function anonymousDescendantTarget() {
+  const value = anonymousIconTarget();
+  value.clickEvidence = {
+    ...value.clickEvidence!,
+    rawTarget: {
+      tag: "em",
+      structuralPath:
+        "html > body > table > tbody > tr:nth-of-type(2) > td:nth-of-type(13) > a > em",
+    },
+    normalizedClickable: {
+      tag: "a",
+      role: "link",
+      structuralPath:
+        "html > body > table > tbody > tr:nth-of-type(2) > td:nth-of-type(13) > a",
+    },
+    icon: undefined,
+    canonicalHref: "https://synthetic.invalid/saisie/anesthesie.cgi",
+    table: {
+      rowIndex: 2,
+      columnIndex: 12,
+      headers: Array.from({ length: 13 }, (_, index) => `Colonne ${index + 1}`),
+      rowText: ["Repère cible", "Salle synthétique", "Statut témoin"],
+    },
+    structuralSnapshot: [
+      "html > body > table > tbody > tr:nth-of-type(2) > td:nth-of-type(13) > a > em",
+      "html > body > table > tbody > tr:nth-of-type(2) > td:nth-of-type(13) > a",
+    ],
+    captureValidation: {
+      canonicalHrefMatchCount: 2,
+      iconMatchCount: 0,
+      rowIconMatchCount: 0,
+      rowClickableMatchCount: 1,
+    },
+  };
+  return value;
+}
+
 describe("demonstration-first locator engine", () => {
   it("preserves the exact consultation editor instead of choosing the first textbox", () => {
     const candidates = generateLocatorCandidates(target());
@@ -399,5 +436,64 @@ describe("demonstration-first locator engine", () => {
         action: "click",
       }).strategy,
     ).toBe("row-icon-context");
+  });
+
+  it("promotes an anonymous <em> descendant and resolves the unique row clickable among duplicate hrefs", () => {
+    const demonstratedTarget = anonymousDescendantTarget();
+    const candidates = generateLocatorCandidates(demonstratedTarget);
+    const canonical = candidates.find(
+      (entry) => entry.strategy === "canonical-href",
+    );
+    const rowContext = candidates.find(
+      (entry) => entry.strategy === "row-clickable-context",
+    );
+    const coordinateFallback = candidates.find(
+      (entry) => entry.strategy === "same-row-column",
+    );
+
+    expect(rowContext).toMatchObject({
+      rule: {
+        strategy: "row-clickable-context",
+        rowIndex: 2,
+        columnIndex: 12,
+        canonicalHref: "https://synthetic.invalid/saisie/anesthesie.cgi",
+      },
+      selectorPreview: "row(<captured-structure>).cell(12).clickable",
+    });
+    expect(coordinateFallback).toMatchObject({
+      rule: {
+        strategy: "same-row-column",
+        rowIndex: 2,
+        columnIndex: 12,
+        canonicalHref: "https://synthetic.invalid/saisie/anesthesie.cgi",
+      },
+      selectorPreview: "table.row(2).cell(12).clickable",
+    });
+
+    const validated = validateCapturedLocatorCandidates(
+      demonstratedTarget,
+      candidates,
+    );
+    expect(validated.find((entry) => entry.id === canonical?.id)).toMatchObject(
+      {
+        matchCount: 2,
+        unique: false,
+      },
+    );
+    expect(
+      validated.find((entry) => entry.id === rowContext?.id),
+    ).toMatchObject({
+      matchCount: 1,
+      visibleCount: 1,
+      enabledCount: 1,
+      typeCompatibleCount: 1,
+      unique: true,
+    });
+    expect(
+      selectDemonstratedLocator(validated, {
+        target: demonstratedTarget,
+        action: "click",
+      }).strategy,
+    ).toBe("row-clickable-context");
   });
 });

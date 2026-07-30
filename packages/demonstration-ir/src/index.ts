@@ -192,6 +192,7 @@ export const DemonstratedTargetSchema = z.object({
         canonicalHrefMatchCount: z.number().int().nonnegative(),
         iconMatchCount: z.number().int().nonnegative(),
         rowIconMatchCount: z.number().int().nonnegative(),
+        rowClickableMatchCount: z.number().int().nonnegative().optional(),
       }),
     })
     .optional(),
@@ -463,6 +464,7 @@ export const LocatorStrategySchema = z.enum([
   "canonical-href",
   "icon-evidence",
   "row-icon-context",
+  "row-clickable-context",
   "stable-attribute",
   "structural-fallback",
   "bounding-box",

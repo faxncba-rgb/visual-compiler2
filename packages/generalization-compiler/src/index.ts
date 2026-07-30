@@ -1399,6 +1399,7 @@ function generatedLocator(
     rule.strategy === "canonical-href" ||
     rule.strategy === "icon-evidence" ||
     rule.strategy === "row-icon-context" ||
+    rule.strategy === "row-clickable-context" ||
     rule.strategy === "same-row-column"
   ) {
     const href = rule.canonicalHref ? new URL(rule.canonicalHref) : undefined;
@@ -1428,14 +1429,16 @@ function generatedLocator(
     let scope = `${root}.locator(${JSON.stringify(hrefSelector)})`;
     if (
       rule.strategy === "row-icon-context" ||
+      rule.strategy === "row-clickable-context" ||
       rule.strategy === "same-row-column"
     ) {
+      const usesSemanticRow =
+        rule.strategy === "row-icon-context" ||
+        rule.strategy === "row-clickable-context";
       const rowTexts =
-        rule.strategy === "row-icon-context" &&
-        rule.rowTexts &&
-        rule.rowTexts.length > 0
+        usesSemanticRow && rule.rowTexts && rule.rowTexts.length > 0
           ? rule.rowTexts
-          : rule.strategy === "row-icon-context" && rule.rowText
+          : usesSemanticRow && rule.rowText
             ? [rule.rowText]
             : [];
       let row: string;

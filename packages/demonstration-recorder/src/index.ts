@@ -638,6 +638,22 @@ const RECORDER_INIT_SCRIPT = `(() => {
       ? Array.from(document.querySelectorAll('a[href] img,a[onclick] img,a[href] svg,a[onclick] svg,a[href] [role=img],a[onclick] [role=img]'))
           .filter(iconMatches).length
       : 0;
+    const rowClickableMatchCount = row && canonicalHref
+      ? Array.from(document.querySelectorAll('tr')).reduce((count, candidateRow) => {
+          const candidateTexts = Array.from(candidateRow.querySelectorAll(':scope > th,:scope > td'))
+            .map(node => staticInterfaceText(node.textContent))
+            .filter(Boolean);
+          const sameRow = rowText.length > 0 && rowText.every(value => candidateTexts.includes(value));
+          if (!sameRow) return count;
+          const candidateCells = Array.from(candidateRow.querySelectorAll(':scope > th,:scope > td'));
+          const candidateCell = candidateCells[Math.max(0, cells.indexOf(cell))];
+          if (!candidateCell) return count;
+          return count + Array.from(candidateCell.querySelectorAll('a[href],a[onclick],[role=link]'))
+            .filter(candidateLink =>
+              canonicalUrl(candidateLink.href || candidateLink.getAttribute('href')) === canonicalHref
+            ).length;
+        }, 0)
+      : 0;
     const rowIconMatchCount = row && icon
       ? Array.from(document.querySelectorAll('tr')).reduce((count, candidateRow) => {
           const candidateTexts = Array.from(candidateRow.querySelectorAll(':scope > th,:scope > td'))
@@ -712,7 +728,8 @@ const RECORDER_INIT_SCRIPT = `(() => {
       captureValidation: {
         canonicalHrefMatchCount,
         iconMatchCount,
-        rowIconMatchCount
+        rowIconMatchCount,
+        rowClickableMatchCount
       }
     };
     return {

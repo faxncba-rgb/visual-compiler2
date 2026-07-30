@@ -571,6 +571,55 @@ export function renderAnonymousIconStays(url?: URL) {
   </article></main></body></html>`;
 }
 
+export function renderAnonymousDescendantPlanning(url?: URL) {
+  const runtimeVariant = url?.searchParams.get("variant") === "runtime";
+  const headers = Array.from(
+    { length: 13 },
+    (_, index) => `<th>Colonne ${index + 1}</th>`,
+  ).join("");
+  const rows = Array.from({ length: 3 }, (_, rowIndex) => {
+    const cells = Array.from({ length: 13 }, (_, columnIndex) => {
+      if (columnIndex === 12 && rowIndex < 2) {
+        return `<td><a href="/fixture/row-descendant/anesthesie.cgi"><em class="anonymous-action"></em></a></td>`;
+      }
+      const mutable =
+        runtimeVariant && rowIndex === 1 && columnIndex === 0
+          ? "Repère cible actualisé"
+          : `Repère ${rowIndex + 1}-${columnIndex + 1}`;
+      return `<td>${mutable}</td>`;
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Planning synthétique · descendant anonyme</title>
+  <style>${baseStyles}
+    table{width:100%;border-collapse:collapse}th,td{padding:6px;border:1px solid #c7d2cc;text-align:left}
+    .anonymous-action{display:block;width:20px;height:20px;border-radius:4px;background:#185a45;cursor:pointer}
+    .anonymous-action::after{content:"";display:block;width:7px;height:7px;margin:5px;border-right:2px solid white;border-bottom:2px solid white;transform:rotate(-45deg)}
+  </style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS DESCENDANT WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Planning synthétique</h1></div>
+  <table aria-label="Planning synthétique"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>
+  </article></main></body></html>`;
+}
+
+export function renderAnonymousDescendantAnesthesia() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage synthétique</title>
+  <style>${baseStyles}</style></head><body>
+  <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS DESCENDANT WORKFLOW ONLY</div>
+  <main><article class="record"><div class="record-title"><h1>Codage synthétique</h1></div>
+  <button type="button" data-vc-action="validate-coding">Valider codage</button>
+  <p role="status" data-vc-outcome="pending">Codage en attente.</p>
+  </article></main>
+  <script>
+    document.querySelector('[data-vc-action=validate-coding]').addEventListener('click', () => {
+      const status = document.querySelector('[data-vc-outcome]');
+      status.dataset.vcOutcome = 'success';
+      status.className = 'status success';
+      status.textContent = 'Codage synthétique validé.';
+    });
+  </script></body></html>`;
+}
+
 export function renderMultiDocumentCoding(url?: URL) {
   const delayedSelection = Boolean(url?.searchParams.get("variant"));
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage étage synthétique</title>
