@@ -305,6 +305,34 @@ export function generateLocatorCandidates(
         order++,
       ),
     );
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "same-row-column",
+          rowIndex: click.table.rowIndex,
+          columnIndex: click.table.columnIndex,
+          iconTag: click.icon.tag,
+          ...(click.table.headers[click.table.columnIndex]
+            ? {
+                columnHeader: click.table.headers[click.table.columnIndex],
+              }
+            : {}),
+          ...(click.form?.name ? { formName: click.form.name } : {}),
+          ...(click.icon.alt ? { iconAlt: click.icon.alt } : {}),
+          ...(click.icon.title ? { iconTitle: click.icon.title } : {}),
+          ...(click.icon.src ? { iconSrc: click.icon.src } : {}),
+          ...(click.canonicalHref
+            ? { canonicalHref: click.canonicalHref }
+            : {}),
+        },
+        `table.row(${click.table.rowIndex}).cell(${click.table.columnIndex}).clickable-icon`,
+        0.83,
+        0.72,
+        "Table-local demonstrated row and column, icon identity and canonical link agree without depending on mutable row text.",
+        order++,
+      ),
+    );
   }
   for (const attribute of ["data-vc-field", "data-vc-action", "data-testid"]) {
     const attributeValue = target.stableAttributes[attribute];
@@ -435,26 +463,51 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
   if (
     rule.strategy === "canonical-href" ||
     rule.strategy === "icon-evidence" ||
-    rule.strategy === "row-icon-context"
+    rule.strategy === "row-icon-context" ||
+    rule.strategy === "same-row-column"
   ) {
     const hrefSelector = rule.canonicalHref
       ? canonicalHrefSelector(rule.canonicalHref)
       : "a[href],a[onclick],[role=link]";
     const iconSelector = iconEvidenceSelector(rule);
     let scope: Locator = root.locator(hrefSelector);
-    if (rule.strategy === "row-icon-context") {
+    if (
+      rule.strategy === "row-icon-context" ||
+      rule.strategy === "same-row-column"
+    ) {
       const rowTexts =
-        rule.rowTexts && rule.rowTexts.length > 0
+        rule.strategy === "row-icon-context" &&
+        rule.rowTexts &&
+        rule.rowTexts.length > 0
           ? rule.rowTexts
-          : rule.rowText
+          : rule.strategy === "row-icon-context" && rule.rowText
             ? [rule.rowText]
             : [];
       if (rowTexts.length === 0 && rule.rowIndex === undefined)
-        throw new Error("Row/icon locator is missing captured row text.");
-      let row = root.locator("tr");
-      for (const rowText of rowTexts) row = row.filter({ hasText: rowText });
-      if (rowTexts.length === 0 && rule.rowIndex !== undefined)
-        row = row.nth(rule.rowIndex);
+        throw new Error("Row/icon locator is missing a demonstrated row.");
+      let row: Locator;
+      if (rule.strategy === "same-row-column") {
+        let table = rule.formName
+          ? root
+              .locator(`form[name="${escapeForAttribute(rule.formName)}"]`)
+              .locator("table")
+          : root.locator("table");
+        table = table.filter({ has: root.locator(hrefSelector) });
+        if (rule.columnHeader && rule.columnIndex !== undefined) {
+          const headerCell = root
+            .locator(`tr > :is(th,td):nth-child(${rule.columnIndex + 1})`)
+            .filter({
+              hasText: exactStaticTextPattern(rule.columnHeader),
+            });
+          table = table.filter({ has: headerCell });
+        }
+        row = table.locator("tr").nth(rule.rowIndex!);
+      } else {
+        row = root.locator("tr");
+        for (const rowText of rowTexts) row = row.filter({ hasText: rowText });
+        if (rowTexts.length === 0 && rule.rowIndex !== undefined)
+          row = row.nth(rule.rowIndex);
+      }
       const rowScope =
         rule.columnIndex === undefined
           ? row
@@ -655,7 +708,8 @@ export function validateCapturedLocatorCandidates(
                   .canonicalHrefMatchCount ?? 0)
               : candidate.strategy === "icon-evidence"
                 ? (target.clickEvidence?.captureValidation.iconMatchCount ?? 0)
-                : candidate.strategy === "row-icon-context"
+                : candidate.strategy === "row-icon-context" ||
+                    candidate.strategy === "same-row-column"
                   ? capturedRowContextMatchCount(target)
                   : ["form-control-name", "stable-attribute"].includes(
                         candidate.strategy,

@@ -341,12 +341,39 @@ test("anonymous <i> is resolved by its row and column among eight canonical link
         enabledCount: 1,
         typeCompatibleCount: 1,
       });
+      expect(
+        iconStep?.locatorCandidates.find(
+          (candidate) => candidate.strategy === "same-row-column",
+        ),
+      ).toMatchObject({
+        rule: {
+          strategy: "same-row-column",
+          rowIndex: 3,
+          columnIndex: 10,
+          iconTag: "i",
+        },
+        unique: true,
+      });
 
       for (let run = 0; run < 2; run += 1) {
-        await browser.navigate(`${fixtureOrigin}${consultationsPath}`);
+        const runtimeWorkflow =
+          run === 0
+            ? {
+                ...workflow,
+                steps: workflow.steps.map((step) => ({
+                  ...step,
+                  locatorCandidates: step.locatorCandidates.filter(
+                    (candidate) => candidate.strategy !== "same-row-column",
+                  ),
+                })),
+              }
+            : workflow;
+        await browser.navigate(
+          `${fixtureOrigin}${consultationsPath}?variant=${run === 0 ? "runtime" : "coordinate"}`,
+        );
         const telemetry = await new DeterministicRuntime({
           context: browser.context,
-          workflow,
+          workflow: runtimeWorkflow,
           variables: {},
           mode: "local",
         }).run();

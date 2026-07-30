@@ -14,6 +14,7 @@ import {
   type CompiledStep,
   type CompiledWorkflow,
   type LocatorCandidate,
+  type LocatorRule,
   type RuntimeTelemetry,
 } from "../../demonstration-ir/src";
 import {
@@ -147,6 +148,61 @@ function selectedFirst(step: CompiledStep) {
   return selected
     ? [selected, ...ranked.filter((candidate) => candidate.id !== selected.id)]
     : ranked;
+}
+
+function runtimeLocatorAttempts(step: CompiledStep) {
+  const ranked = selectedFirst(step);
+  const hasExplicitCoordinateFallback = ranked.some(
+    (candidate) => candidate.strategy === "same-row-column",
+  );
+  const attempts: Array<{
+    candidate: LocatorCandidate;
+    rule: LocatorRule;
+  }> = [];
+  for (const candidate of ranked) {
+    attempts.push({ candidate, rule: candidate.rule });
+    const rule = candidate.rule;
+    const rowTexts =
+      rule.strategy === "row-icon-context"
+        ? (rule.rowTexts ?? (rule.rowText ? [rule.rowText] : []))
+        : [];
+    if (rowTexts.length > 1) {
+      for (
+        let omittedIndex = 0;
+        omittedIndex < rowTexts.length;
+        omittedIndex += 1
+      ) {
+        const retainedRowTexts = rowTexts.filter(
+          (_, index) => index !== omittedIndex,
+        );
+        attempts.push({
+          candidate,
+          rule: {
+            ...rule,
+            rowText: retainedRowTexts[0],
+            rowTexts: retainedRowTexts,
+          },
+        });
+      }
+    }
+    if (
+      !hasExplicitCoordinateFallback &&
+      rule.strategy === "row-icon-context" &&
+      rule.rowIndex !== undefined &&
+      rule.columnIndex !== undefined
+    ) {
+      attempts.push({
+        candidate,
+        rule: {
+          ...rule,
+          strategy: "same-row-column",
+          rowText: undefined,
+          rowTexts: undefined,
+        },
+      });
+    }
+  }
+  return attempts;
 }
 
 function abortError() {
@@ -582,8 +638,8 @@ export class DeterministicRuntime {
       step,
       phase: "Resolving target",
     });
-    for (const candidate of selectedFirst(step)) {
-      const locator = locatorForRule(root, candidate.rule);
+    for (const { candidate, rule } of runtimeLocatorAttempts(step)) {
+      const locator = locatorForRule(root, rule);
       if ((await locator.count().catch(() => 0)) !== 1) continue;
       if (!(await locator.isVisible().catch(() => false))) continue;
       if (!(await locator.isEnabled().catch(() => false))) continue;

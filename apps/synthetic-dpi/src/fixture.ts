@@ -520,17 +520,22 @@ export function renderMultiDocumentStays() {
   </article></main></body></html>`;
 }
 
-export function renderAnonymousIconConsultations() {
+export function renderAnonymousIconConsultations(url?: URL) {
+  const variant = url?.searchParams.get("variant");
+  const staysHref = variant
+    ? `/fixture/anonymous-icon/sejours.cgi?variant=${variant}`
+    : "/fixture/anonymous-icon/sejours.cgi";
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Consultations synthétiques · icône anonyme</title>
   <style>${baseStyles}</style></head><body>
   <div class="lab">LAB MODE — SYNTHETIC ANONYMOUS ICON WORKFLOW ONLY</div>
   <main><article class="record"><div class="record-title"><h1>Consultations</h1></div>
   <p>Parcours synthétique sans donnée réelle.</p>
-  <a href="/fixture/anonymous-icon/sejours.cgi" data-vc-action="open-stays">Ouvrir les séjours</a>
+  <a href="${staysHref}" data-vc-action="open-stays">Ouvrir les séjours</a>
   </article></main></body></html>`;
 }
 
-export function renderAnonymousIconStays() {
+export function renderAnonymousIconStays(url?: URL) {
+  const variant = url?.searchParams.get("variant");
   const headers = Array.from(
     { length: 12 },
     (_, index) => `<th>Colonne ${index + 1}</th>`,
@@ -539,7 +544,13 @@ export function renderAnonymousIconStays() {
     const cells = Array.from({ length: 12 }, (_, columnIndex) => {
       if (columnIndex === 10)
         return `<td><a href="/fixture/anonymous-icon/codage_etage.cgi?stay=${rowIndex + 1}"><i class="anonymous-coding-icon"></i></a></td>`;
-      return `<td>Repère ${rowIndex + 1}-${columnIndex + 1}</td>`;
+      const mutableSuffix =
+        rowIndex === 2 &&
+        (variant === "coordinate" ||
+          (variant === "runtime" && columnIndex === 0))
+          ? `modifié-${columnIndex + 1}`
+          : `${rowIndex + 1}-${columnIndex + 1}`;
+      return `<td>Repère ${mutableSuffix}</td>`;
     }).join("");
     return `<tr>${cells}</tr>`;
   }).join("");

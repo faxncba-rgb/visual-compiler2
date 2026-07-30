@@ -69,9 +69,9 @@ export function createSyntheticDpiServer() {
     if (url.pathname === "/fixture/multidoc/codage_etage.cgi")
       return html(response, renderMultiDocumentCoding());
     if (url.pathname === "/fixture/anonymous-icon/consultations.cgi")
-      return html(response, renderAnonymousIconConsultations());
+      return html(response, renderAnonymousIconConsultations(url));
     if (url.pathname === "/fixture/anonymous-icon/sejours.cgi")
-      return html(response, renderAnonymousIconStays());
+      return html(response, renderAnonymousIconStays(url));
     if (url.pathname === "/fixture/anonymous-icon/codage_etage.cgi")
       return html(response, renderMultiDocumentCoding());
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

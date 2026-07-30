@@ -1398,7 +1398,8 @@ function generatedLocator(
   if (
     rule.strategy === "canonical-href" ||
     rule.strategy === "icon-evidence" ||
-    rule.strategy === "row-icon-context"
+    rule.strategy === "row-icon-context" ||
+    rule.strategy === "same-row-column"
   ) {
     const href = rule.canonicalHref ? new URL(rule.canonicalHref) : undefined;
     const hrefSelector = href
@@ -1415,18 +1416,36 @@ function generatedLocator(
             })()
           : undefined;
     let scope = `${root}.locator(${JSON.stringify(hrefSelector)})`;
-    if (rule.strategy === "row-icon-context") {
+    if (
+      rule.strategy === "row-icon-context" ||
+      rule.strategy === "same-row-column"
+    ) {
       const rowTexts =
-        rule.rowTexts && rule.rowTexts.length > 0
+        rule.strategy === "row-icon-context" &&
+        rule.rowTexts &&
+        rule.rowTexts.length > 0
           ? rule.rowTexts
-          : rule.rowText
+          : rule.strategy === "row-icon-context" && rule.rowText
             ? [rule.rowText]
             : [];
-      let row = `${root}.locator('tr')`;
-      for (const rowText of rowTexts)
-        row = `${row}.filter({ hasText: ${JSON.stringify(rowText)} })`;
-      if (rowTexts.length === 0 && rule.rowIndex !== undefined)
-        row = `${row}.nth(${rule.rowIndex})`;
+      let row: string;
+      if (rule.strategy === "same-row-column") {
+        const tableRoot = rule.formName
+          ? `${root}.locator(${JSON.stringify(`form[name="${rule.formName}"]`)}).locator('table')`
+          : `${root}.locator('table')`;
+        let table = `${tableRoot}.filter({ has: ${root}.locator(${JSON.stringify(hrefSelector)}) })`;
+        if (rule.columnHeader && rule.columnIndex !== undefined) {
+          const headerCell = `${root}.locator(${JSON.stringify(`tr > :is(th,td):nth-child(${rule.columnIndex + 1})`)}).filter({ hasText: ${generatedExactTextPattern(rule.columnHeader)} })`;
+          table = `${table}.filter({ has: ${headerCell} })`;
+        }
+        row = `${table}.locator('tr').nth(${rule.rowIndex})`;
+      } else {
+        row = `${root}.locator('tr')`;
+        for (const rowText of rowTexts)
+          row = `${row}.filter({ hasText: ${JSON.stringify(rowText)} })`;
+        if (rowTexts.length === 0 && rule.rowIndex !== undefined)
+          row = `${row}.nth(${rule.rowIndex})`;
+      }
       if (rule.columnIndex !== undefined)
         row = `${row}.locator(':scope > th, :scope > td').nth(${rule.columnIndex})`;
       scope = `${row}.locator(${JSON.stringify(hrefSelector)})`;

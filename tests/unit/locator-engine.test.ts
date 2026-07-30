@@ -338,6 +338,9 @@ describe("demonstration-first locator engine", () => {
     const rowContext = candidates.find(
       (entry) => entry.strategy === "row-icon-context",
     );
+    const coordinateFallback = candidates.find(
+      (entry) => entry.strategy === "same-row-column",
+    );
 
     expect(rowContext).toMatchObject({
       rule: {
@@ -350,6 +353,17 @@ describe("demonstration-first locator engine", () => {
       selectorPreview: "row(<captured-structure>).cell(10).clickable-icon",
     });
     expect(rowContext?.selectorPreview).not.toContain("Repère");
+    expect(coordinateFallback).toMatchObject({
+      rule: {
+        strategy: "same-row-column",
+        rowIndex: 3,
+        columnIndex: 10,
+        iconTag: "i",
+        canonicalHref: "https://synthetic.invalid/saisie/codage_etage.cgi",
+      },
+      selectorPreview: "table.row(3).cell(10).clickable-icon",
+    });
+    expect(coordinateFallback?.rule.rowTexts).toBeUndefined();
 
     const validated = validateCapturedLocatorCandidates(
       demonstratedTarget,
@@ -363,6 +377,15 @@ describe("demonstration-first locator engine", () => {
     );
     expect(
       validated.find((entry) => entry.id === rowContext?.id),
+    ).toMatchObject({
+      matchCount: 1,
+      visibleCount: 1,
+      enabledCount: 1,
+      typeCompatibleCount: 1,
+      unique: true,
+    });
+    expect(
+      validated.find((entry) => entry.id === coordinateFallback?.id),
     ).toMatchObject({
       matchCount: 1,
       visibleCount: 1,
