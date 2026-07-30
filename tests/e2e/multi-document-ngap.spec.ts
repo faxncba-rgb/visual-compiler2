@@ -436,6 +436,8 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
     `${fixtureOrigin}${planningPath}`,
     async ({ browser, page, recorder }) => {
       await recorder.start();
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.waitForTimeout(50);
 
       await expect(page.locator(`a[href="${anesthesiaPath}"]`)).toHaveCount(2);
       await page
@@ -455,6 +457,10 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
       ).toBeVisible();
 
       const session = await recorder.stop();
+      expect(session.actions[0]).toMatchObject({
+        action: "focus",
+        beforeState: { pathname: planningPath },
+      });
       const descendantClick = session.actions.find(
         (action) =>
           action.target?.clickEvidence?.canonicalHref ===
@@ -507,9 +513,6 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
       });
 
       for (let run = 0; run < 2; run += 1) {
-        await browser.navigate(
-          `${fixtureOrigin}${planningPath}${run === 0 ? "?variant=runtime" : ""}`,
-        );
         const telemetry = await new DeterministicRuntime({
           context: browser.context,
           workflow,
@@ -519,6 +522,10 @@ test("anonymous <em> descendant is resolved in its captured row after its link d
         expect(telemetry.state, telemetry.error).toBe("Passed");
         expect(telemetry.llmCalls).toBe(0);
         expect(telemetry.openAIRequests).toBe(0);
+        expect(telemetry.steps[0]).toMatchObject({
+          action: "focus",
+          status: "passed",
+        });
         await expect(
           page.getByText("Codage synthétique validé.", { exact: true }),
         ).toBeVisible();

@@ -520,9 +520,10 @@ export class DeterministicRuntime {
 
   #entryMainContext() {
     const contexts = this.#workflow.pageContexts;
-    let current = contexts.find(
+    const stepContext = contexts.find(
       (context) => context.id === this.#workflow.steps[0]?.pageContextId,
     );
+    let current = stepContext;
     const visited = new Set<string>();
     while (current?.parentId && current.role !== "main") {
       if (visited.has(current.id)) break;
@@ -531,7 +532,21 @@ export class DeterministicRuntime {
         (candidate) => candidate.id === current?.parentId,
       );
     }
-    if (current?.role === "main") return current;
+    if (current?.role === "main") {
+      if (stepContext?.role === "frame") {
+        const sameDocumentMain = contexts.find(
+          (context) =>
+            context.role === "main" &&
+            context.pageId === stepContext.pageId &&
+            context.documentOrdinal === stepContext.documentOrdinal &&
+            context.origin !== "null" &&
+            context.pathname !== "blank" &&
+            context.status !== "closed",
+        );
+        if (sameDocumentMain) return sameDocumentMain;
+      }
+      return current;
+    }
     return (
       [...contexts]
         .reverse()
@@ -552,6 +567,82 @@ export class DeterministicRuntime {
     );
   }
 
+  #forgetResolvedPage(page: Page) {
+    for (const [contextId, resolved] of this.#pages.resolved) {
+      const resolvedPage =
+        "mainFrame" in resolved
+          ? (resolved as Page)
+          : (resolved as Frame).page();
+      if (resolvedPage === page) this.#pages.resolved.delete(contextId);
+    }
+  }
+
+  async #rewindToEntryMainContext(
+    entry: CompiledPageContext,
+    openPages: Page[],
+  ) {
+    const sameTabDocuments = this.#workflow.pageContexts
+      .filter(
+        (context) =>
+          context.role === "main" &&
+          context.pageId === entry.pageId &&
+          context.origin === entry.origin &&
+          context.documentOrdinal >= entry.documentOrdinal,
+      )
+      .sort((left, right) => left.documentOrdinal - right.documentOrdinal);
+    for (const page of openPages) {
+      const current = [...sameTabDocuments]
+        .reverse()
+        .find(
+          (context) =>
+            context.documentOrdinal > entry.documentOrdinal &&
+            canonicalMatches(page.url(), context),
+        );
+      if (!current) continue;
+      let traversed = 0;
+      let aligned = true;
+      for (
+        let ordinal = current.documentOrdinal - 1;
+        ordinal >= entry.documentOrdinal;
+        ordinal -= 1
+      ) {
+        const expected = sameTabDocuments.find(
+          (context) => context.documentOrdinal === ordinal,
+        );
+        if (!expected) {
+          aligned = false;
+          break;
+        }
+        await page
+          .goBack({
+            waitUntil: "domcontentloaded",
+            timeout: this.#timeout,
+          })
+          .catch(() => undefined);
+        traversed += 1;
+        if (!canonicalMatches(page.url(), expected)) {
+          aligned = false;
+          break;
+        }
+      }
+      if (aligned && canonicalMatches(page.url(), entry)) {
+        this.#forgetResolvedPage(page);
+        this.#pages.resolved.set(entry.id, page);
+        return true;
+      }
+      while (traversed > 0) {
+        await page
+          .goForward({
+            waitUntil: "domcontentloaded",
+            timeout: this.#timeout,
+          })
+          .catch(() => undefined);
+        traversed -= 1;
+      }
+    }
+    return false;
+  }
+
   async #resolveInitialContexts() {
     const openPages = this.options.context
       .pages()
@@ -567,7 +658,7 @@ export class DeterministicRuntime {
     }
     const requiredMain = this.#entryMainContext();
     if (requiredMain && !this.#pages.resolved.has(requiredMain.id)) {
-      if (this.#resolvedMainContext()) return;
+      if (await this.#rewindToEntryMainContext(requiredMain, openPages)) return;
       const firstMainTarget = this.#workflow.steps.find(
         (step) => step.target?.frame.role === "main",
       )?.target?.frame;
