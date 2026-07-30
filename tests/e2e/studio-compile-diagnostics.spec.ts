@@ -237,6 +237,53 @@ test("Studio reconciles a completed compilation while the POST response is delay
   }, "/fixture/keyboard-validation");
 });
 
+test("reopening the managed browser preserves a compiled workflow as runnable", async ({
+  page,
+}) => {
+  await withIsolatedStudio(async ({ controller, studioOrigin }) => {
+    await page.goto(studioOrigin);
+    await page
+      .getByRole("button", { name: "Start teaching", exact: true })
+      .click();
+    await controller.browser.mainPage
+      .getByRole("button", {
+        name: "Choisir une catégorie",
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole("button", { name: "Stop teaching", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Compile", exact: true }).click();
+    await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+    const workflowId = controller.workflow?.id;
+
+    await page
+      .getByRole("button", {
+        name: "Reopen managed browser",
+        exact: true,
+      })
+      .click();
+
+    await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+    expect(controller.workflow?.id).toBe(workflowId);
+    await expect(
+      page.getByRole("button", { name: "Run locally", exact: true }),
+    ).toBeEnabled();
+
+    await page
+      .getByRole("button", { name: "Run locally", exact: true })
+      .click();
+    await expect(page.locator("#studioState")).toHaveText(
+      "COMPLETED_UNVERIFIED",
+    );
+    expect(controller.telemetry).toMatchObject({
+      llmCalls: 0,
+      openAIRequests: 0,
+    });
+  }, "/fixture/keyboard-validation");
+});
+
 async function closeStudioServer(server: Server, controller: StudioController) {
   await controller.browser.close().catch(() => undefined);
   const closed = new Promise<void>((resolve) => server.close(() => resolve()));

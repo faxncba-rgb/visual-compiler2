@@ -839,6 +839,7 @@ export class StudioController {
       if (this.machine.state !== "IDLE") this.machine.reset();
       this.machine.transition("BROWSER_OPEN");
       this.machine.transition("READY_TO_TEACH");
+      if (this.workflow) this.machine.transition("READY_TO_RUN");
       await this.persistRecoverableState();
     } catch (error) {
       await this.browser.close().catch(() => undefined);
