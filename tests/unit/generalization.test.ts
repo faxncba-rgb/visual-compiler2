@@ -5,6 +5,8 @@ import {
   MockGeneralizationProvider,
   OpenAiCompileProvider,
   buildAiPayload,
+  compileDemonstration,
+  validateAndNormalizeSemanticIr,
 } from "../../packages/generalization-compiler/src";
 import { session } from "../helpers/factories";
 
@@ -61,6 +63,107 @@ describe("strict AI generalization boundary", () => {
         loops: [],
       }),
     ).toThrow();
+  });
+
+  it("keeps immutable local actions while dropping orphan GPT enrichments and inferences", async () => {
+    const demonstration = session();
+    const provider = new MockGeneralizationProvider();
+    const output = AiGeneralizationOutputSchema.parse(
+      await provider.generalize(
+        buildAiPayload(demonstration, "Repeat each demonstrated action.", {}),
+      ),
+    );
+    output.enrichments.push(
+      {
+        ...output.enrichments[0]!,
+        sourceActionId: "invented-action",
+      },
+      {
+        ...output.enrichments[0]!,
+        intention: "Duplicate must not replace the first enrichment.",
+      },
+    );
+    output.inferredActions.push({
+      action: "navigation",
+      name: "Ungrounded navigation",
+      position: {
+        relativeToSourceActionId: "invented-action",
+        placement: "after",
+      },
+      pageContextId: "invented-document",
+      evidenceRefs: ["invented-evidence"],
+      confidence: 0.99,
+      justification: "The model invented every reference.",
+      asPostcondition: false,
+    });
+    output.loops[0]!.templateActionIds.push("invented-action");
+    output.loops.push({
+      ...output.loops[0]!,
+      templateActionIds: ["invented-action"],
+    });
+
+    const normalized = validateAndNormalizeSemanticIr(output, demonstration);
+    expect(
+      normalized.output.enrichments.map(
+        (enrichment) => enrichment.sourceActionId,
+      ),
+    ).toEqual(demonstration.actions.map((action) => action.id));
+    expect(normalized.output.inferredActions).toEqual([]);
+    expect(normalized.output.loops).toHaveLength(1);
+    expect(normalized.output.loops[0]?.templateActionIds).toEqual([
+      "action-fill",
+    ]);
+    expect(normalized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
+      [
+        "GPT_ORPHAN_ENRICHMENT_DROPPED",
+        "GPT_DUPLICATE_ENRICHMENT_DROPPED",
+        "GPT_UNGROUNDED_INFERRED_ACTION_DROPPED",
+        "GPT_UNKNOWN_LOOP_REFERENCE_DROPPED",
+        "GPT_UNGROUNDED_LOOP_DROPPED",
+      ],
+    );
+  });
+
+  it("compiles successfully when GPT returns an otherwise valid orphan enrichment", async () => {
+    const demonstration = session();
+    const mock = new MockGeneralizationProvider();
+    const provider = {
+      mode: mock.mode,
+      model: "gpt-5.6" as const,
+      async generalize(payload: Parameters<typeof mock.generalize>[0]) {
+        const output = AiGeneralizationOutputSchema.parse(
+          await mock.generalize(payload),
+        );
+        output.enrichments.push({
+          ...output.enrichments[0]!,
+          sourceActionId: "invented-action",
+        });
+        return output;
+      },
+    };
+    const { workflow } = await compileDemonstration({
+      session: demonstration,
+      graph: {
+        resolveLiveTargetRoot: async () => ({
+          originalDomNodeReplaced: false,
+          semanticEquivalentFound: true,
+        }),
+      } as never,
+      localValues: {},
+      provider,
+    });
+
+    expect(
+      workflow.steps
+        .filter((step) => !step.inferred)
+        .map((step) => step.sourceActionId),
+    ).toEqual(demonstration.actions.map((action) => action.id));
+    expect(workflow.compilationMetadata.diagnostics).toContainEqual({
+      level: "warning",
+      code: "GPT_ORPHAN_ENRICHMENT_DROPPED",
+      message:
+        "1 GPT enrichment(s) referenced no demonstrated action and were ignored.",
+    });
   });
 
   it("uses GPT-5.6 Responses structured output exactly once without an SDK", async () => {

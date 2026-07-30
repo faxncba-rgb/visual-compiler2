@@ -23,7 +23,7 @@ import {
 } from "../../workflow-variables/src";
 import { createId, sha256 } from "../../shared/src";
 
-export const PROMPT_VERSION = "semantic-enrichment-gpt-5.6-v3";
+export const PROMPT_VERSION = "semantic-enrichment-gpt-5.6-v4";
 export const COMPILE_MODEL = "gpt-5.6";
 
 export type CompilationStage =
@@ -546,49 +546,117 @@ export class OpenAiCompileProvider implements GeneralizationProvider {
   }
 }
 
-function validateSemanticIr(rawOutput: unknown, session: DemonstrationSession) {
+type SemanticIrNormalizationDiagnostic = {
+  level: "warning";
+  code: string;
+  message: string;
+};
+
+export function validateAndNormalizeSemanticIr(
+  rawOutput: unknown,
+  session: DemonstrationSession,
+) {
   const output = SemanticIrSchema.parse(rawOutput);
   const actionIds = new Set(session.actions.map((action) => action.id));
+  const pageContextIds = new Set(session.pages.map((page) => page.id));
+  const evidenceIds = new Set([
+    ...actionIds,
+    ...session.actions.flatMap((action) =>
+      action.observedEffects.flatMap((effect) => [
+        effect.fingerprint,
+        effect.pageContextId,
+      ]),
+    ),
+  ]);
+  const diagnostics: SemanticIrNormalizationDiagnostic[] = [];
   const enrichmentIds = new Set<string>();
+  const enrichments: AiGeneralizationOutput["enrichments"] = [];
+  let orphanEnrichmentCount = 0;
+  let duplicateEnrichmentCount = 0;
   for (const enrichment of output.enrichments) {
-    if (!actionIds.has(enrichment.sourceActionId))
-      throw new Error(
-        "GPT-5.6 enrichment referenced an unknown sourceActionId.",
-      );
-    if (enrichmentIds.has(enrichment.sourceActionId))
-      throw new Error("GPT-5.6 enrichment duplicated a sourceActionId.");
+    if (!actionIds.has(enrichment.sourceActionId)) {
+      orphanEnrichmentCount += 1;
+      continue;
+    }
+    if (enrichmentIds.has(enrichment.sourceActionId)) {
+      duplicateEnrichmentCount += 1;
+      continue;
+    }
     enrichmentIds.add(enrichment.sourceActionId);
+    enrichments.push(enrichment);
   }
+  if (orphanEnrichmentCount > 0)
+    diagnostics.push({
+      level: "warning",
+      code: "GPT_ORPHAN_ENRICHMENT_DROPPED",
+      message: `${orphanEnrichmentCount} GPT enrichment(s) referenced no demonstrated action and were ignored.`,
+    });
+  if (duplicateEnrichmentCount > 0)
+    diagnostics.push({
+      level: "warning",
+      code: "GPT_DUPLICATE_ENRICHMENT_DROPPED",
+      message: `${duplicateEnrichmentCount} duplicate GPT enrichment(s) were ignored; the first valid enrichment was retained.`,
+    });
+
+  const inferredActions: AiGeneralizationOutput["inferredActions"] = [];
+  let invalidInferredActionCount = 0;
   for (const inferred of output.inferredActions) {
-    if (!actionIds.has(inferred.position.relativeToSourceActionId))
-      throw new Error(
-        "GPT-5.6 inferred action referenced an unknown insertion sourceActionId.",
-      );
-    if (
-      inferred.pageContextId &&
-      !session.pages.some((page) => page.id === inferred.pageContextId)
-    )
-      throw new Error(
-        "GPT-5.6 inferred action referenced an unknown document context.",
-      );
-    if (
-      inferred.evidenceRefs.some(
-        (reference) =>
-          !actionIds.has(reference) &&
-          !session.actions.some((action) =>
-            action.observedEffects.some(
-              (effect) =>
-                effect.fingerprint === reference ||
-                effect.pageContextId === reference,
-            ),
-          ),
-      )
-    )
-      throw new Error(
-        "GPT-5.6 inferred action lacked demonstrated evidence references.",
-      );
+    const valid =
+      actionIds.has(inferred.position.relativeToSourceActionId) &&
+      (!inferred.pageContextId || pageContextIds.has(inferred.pageContextId)) &&
+      inferred.evidenceRefs.every((reference) => evidenceIds.has(reference));
+    if (!valid) {
+      invalidInferredActionCount += 1;
+      continue;
+    }
+    inferredActions.push(inferred);
   }
-  return output;
+  if (invalidInferredActionCount > 0)
+    diagnostics.push({
+      level: "warning",
+      code: "GPT_UNGROUNDED_INFERRED_ACTION_DROPPED",
+      message: `${invalidInferredActionCount} inferred GPT action(s) lacked a valid insertion point, document or evidence reference and were ignored.`,
+    });
+
+  const loops: AiGeneralizationOutput["loops"] = [];
+  let filteredLoopReferenceCount = 0;
+  let droppedLoopCount = 0;
+  for (const loop of output.loops) {
+    const templateActionIds = [
+      ...new Set(
+        loop.templateActionIds.filter((actionId) => actionIds.has(actionId)),
+      ),
+    ];
+    filteredLoopReferenceCount +=
+      loop.templateActionIds.length - templateActionIds.length;
+    if (templateActionIds.length === 0) {
+      droppedLoopCount += 1;
+      continue;
+    }
+    loops.push({ ...loop, templateActionIds });
+  }
+  if (filteredLoopReferenceCount > 0)
+    diagnostics.push({
+      level: "warning",
+      code: "GPT_UNKNOWN_LOOP_REFERENCE_DROPPED",
+      message: `${filteredLoopReferenceCount} unknown GPT loop action reference(s) were ignored.`,
+    });
+  if (droppedLoopCount > 0)
+    diagnostics.push({
+      level: "warning",
+      code: "GPT_UNGROUNDED_LOOP_DROPPED",
+      message: `${droppedLoopCount} GPT loop(s) without demonstrated template actions were ignored.`,
+    });
+
+  return {
+    output: {
+      ...output,
+      enrichments,
+      inferredActions,
+      loops,
+    },
+    diagnostics,
+  };
 }
 
 function redactStructuralText(value: string | undefined) {
@@ -1584,16 +1652,19 @@ export async function compileDemonstration({
   const instruction = generalizationInstruction.trim();
   let aiPayload: AiPayload;
   let aiOutput: AiGeneralizationOutput;
+  let semanticIrDiagnostics: SemanticIrNormalizationDiagnostic[] = [];
   try {
     if (!provider)
       throw new Error(
         "GPT-5.6 compilation is unavailable. Configure OPENAI_API_KEY in the local ignored environment file.",
       );
     aiPayload = buildAiPayload(session, instruction, localValues);
-    aiOutput = validateSemanticIr(
+    const normalized = validateAndNormalizeSemanticIr(
       await provider.generalize(aiPayload),
       session,
     );
+    aiOutput = normalized.output;
+    semanticIrDiagnostics = normalized.diagnostics;
   } catch (error) {
     throw compilationStageError("generalization", error);
   }
@@ -1656,6 +1727,7 @@ export async function compileDemonstration({
                 ? "Validated Semantic IR was produced once by GPT-5.6 at compile time."
                 : "Validated Semantic IR was produced once by the automated GPT-5.6 test mock.",
           },
+          ...semanticIrDiagnostics,
         ],
         generatedPlaywright: generatePlaywright(workflowId, steps),
       },
