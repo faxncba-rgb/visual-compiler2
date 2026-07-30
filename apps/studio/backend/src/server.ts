@@ -1354,6 +1354,26 @@ export class StudioController {
     return workflow;
   }
 
+  async renameWorkflow(id: unknown, name: unknown) {
+    await this.#loadWorkflowLibrary();
+    if (typeof id !== "string")
+      throw new Error("Saved workflow identifier is required.");
+    const normalizedName = this.#normalizeWorkflowName(name);
+    if (!normalizedName) throw new Error("Workflow name must not be empty.");
+    const entry = this.workflowLibraryEntries.find(
+      (candidate) => candidate.id === id,
+    );
+    if (!entry) throw new Error("Saved workflow was not found.");
+    entry.name = normalizedName;
+    entry.updatedAt = new Date().toISOString();
+    if (this.selectedWorkflowId === entry.id)
+      this.workflowName = normalizedName;
+    this.workflowLibraryStatus = `Renamed locally · ${normalizedName} · version ${entry.version}`;
+    await this.#writeWorkflowLibraryIndex();
+    await this.persistRecoverableState();
+    return entry;
+  }
+
   async run(mode: unknown) {
     if (this.#mutation)
       throw new Error(`A ${this.#mutation} request is already active.`);
@@ -1617,6 +1637,17 @@ export function createStudioServer(controller = new StudioController()) {
       ) {
         const body = await readJson(request);
         await controller.selectWorkflow(body.id);
+        return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "PATCH" &&
+        url.pathname.startsWith("/api/workflows/")
+      ) {
+        const id = decodeURIComponent(
+          url.pathname.slice("/api/workflows/".length),
+        );
+        const body = await readJson(request);
+        await controller.renameWorkflow(id, body.name);
         return sendJson(response, 200, controller.snapshot());
       }
       if (

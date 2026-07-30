@@ -737,6 +737,59 @@ test("Workflow Library auto-saves immutable versions, reloads after restart and 
   );
 });
 
+test("a selected saved workflow is renamed from the existing name field and persists locally", async ({
+  page,
+}) => {
+  await withIsolatedStudio(
+    async ({ controller, rootDirectory, studioOrigin }) => {
+      const originalName = "Legacy workflow-93f";
+      const renamedName = "Consultation patient test";
+      await teachLegacyLayoutA(
+        page,
+        controller,
+        studioOrigin,
+        "SYNTHETIC-RENAME-WORKFLOW",
+      );
+      await page
+        .getByLabel("Workflow name", { exact: true })
+        .fill(originalName);
+      await page.getByRole("button", { name: "Compile", exact: true }).click();
+      await expect(page.locator("#studioState")).toHaveText("READY_TO_RUN");
+      const selectedId = controller.snapshot().workflowLibrary.selectedId;
+      expect(selectedId).toBeTruthy();
+
+      await page.getByLabel("Workflow name", { exact: true }).fill(renamedName);
+      await page.getByLabel("Workflow name", { exact: true }).press("Enter");
+      await expect(page.locator("#workflowLibraryStatus")).toContainText(
+        `Renamed locally · ${renamedName}`,
+      );
+      await expect(
+        page.getByLabel("Saved workflows", { exact: true }),
+      ).toContainText(`${renamedName} · v1`);
+      await expect(
+        page.getByLabel("Workflow name", { exact: true }),
+      ).toHaveValue(renamedName);
+
+      const persistedIndex = JSON.parse(
+        await readFile(
+          path.join(
+            rootDirectory,
+            "local-data",
+            "workflow-library",
+            "index.json",
+          ),
+          "utf8",
+        ),
+      ) as {
+        entries: Array<{ id: string; name: string }>;
+      };
+      expect(
+        persistedIndex.entries.find((entry) => entry.id === selectedId),
+      ).toMatchObject({ name: renamedName });
+    },
+  );
+});
+
 test("Teaching trace is automatic, structural and referenced by persistent missing-action diagnostics", async ({
   page,
 }) => {

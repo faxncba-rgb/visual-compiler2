@@ -558,6 +558,19 @@ async function compileWorkflow() {
   }
 }
 
+async function renameSelectedWorkflow() {
+  const id = state?.workflowLibrary?.selectedId;
+  if (!id) return;
+  const name = $("#workflowName").value;
+  if (name.trim() === state.workflowLibrary.name) return;
+  await mutate(
+    `/api/workflows/${encodeURIComponent(id)}`,
+    { name },
+    "Saved workflow renamed.",
+    "PATCH",
+  );
+}
+
 async function run(mode) {
   lastRunMode = mode;
   requestInFlight = true;
@@ -616,6 +629,14 @@ $("#savedWorkflows").addEventListener("change", () => {
     { id },
     "Saved workflow loaded and ready to run.",
   );
+});
+$("#workflowName").addEventListener("change", () => {
+  void renameSelectedWorkflow();
+});
+$("#workflowName").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  event.currentTarget.blur();
 });
 $("#localRun").addEventListener("click", () => void run("local"));
 $("#animatedRun").addEventListener("click", () => void run("animated"));
