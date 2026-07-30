@@ -350,7 +350,6 @@ test("anonymous <i> is resolved by its row and column among eight canonical link
           strategy: "same-row-column",
           rowIndex: 3,
           columnIndex: 10,
-          iconTag: "i",
         },
         unique: true,
       });
@@ -368,6 +367,47 @@ test("anonymous <i> is resolved by its row and column among eight canonical link
                 })),
               }
             : workflow;
+        if (run === 0) {
+          const selectionStep = runtimeWorkflow.steps.find(
+            (step) => step.action === "select",
+          )!;
+          const staleCandidate = {
+            ...selectionStep.locatorCandidates[0]!,
+            id: "locator-legacy-stale-selection",
+            strategy: "form-control-name" as const,
+            rule: {
+              strategy: "form-control-name" as const,
+              formControlName: "legacy_code_ngap",
+            },
+            selectorPreview: '[name="legacy_code_ngap"]',
+          };
+          const staleSelectionStep = {
+            ...selectionStep,
+            locatorCandidates: [staleCandidate],
+            selectedLocatorId: staleCandidate.id,
+          };
+          runtimeWorkflow.steps = runtimeWorkflow.steps.flatMap((step) =>
+            step.id === selectionStep.id
+              ? [
+                  {
+                    ...staleSelectionStep,
+                    id: "step-legacy-select-click-before",
+                    action: "click" as const,
+                    value: undefined,
+                    postconditions: [],
+                  },
+                  staleSelectionStep,
+                  {
+                    ...staleSelectionStep,
+                    id: "step-legacy-select-click-after",
+                    action: "click" as const,
+                    value: undefined,
+                    postconditions: [],
+                  },
+                ]
+              : [step],
+          );
+        }
         await browser.navigate(
           `${fixtureOrigin}${consultationsPath}?variant=${run === 0 ? "runtime" : "coordinate"}`,
         );

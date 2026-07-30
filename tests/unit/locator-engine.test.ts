@@ -358,12 +358,12 @@ describe("demonstration-first locator engine", () => {
         strategy: "same-row-column",
         rowIndex: 3,
         columnIndex: 10,
-        iconTag: "i",
         canonicalHref: "https://synthetic.invalid/saisie/codage_etage.cgi",
       },
       selectorPreview: "table.row(3).cell(10).clickable-icon",
     });
     expect(coordinateFallback?.rule.rowTexts).toBeUndefined();
+    expect(coordinateFallback?.rule.iconTag).toBeUndefined();
 
     const validated = validateCapturedLocatorCandidates(
       demonstratedTarget,

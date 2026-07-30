@@ -542,8 +542,13 @@ export function renderAnonymousIconStays(url?: URL) {
   ).join("");
   const rows = Array.from({ length: 8 }, (_, rowIndex) => {
     const cells = Array.from({ length: 12 }, (_, columnIndex) => {
-      if (columnIndex === 10)
-        return `<td><a href="/fixture/anonymous-icon/codage_etage.cgi?stay=${rowIndex + 1}"><i class="anonymous-coding-icon"></i></a></td>`;
+      if (columnIndex === 10) {
+        const iconTag = variant ? "span" : "i";
+        const codingHref = variant
+          ? `codage_etage.cgi?stay=${rowIndex + 1}&variant=${variant}`
+          : `/fixture/anonymous-icon/codage_etage.cgi?stay=${rowIndex + 1}`;
+        return `<td><a href="${codingHref}"><${iconTag} class="anonymous-coding-icon"></${iconTag}></a></td>`;
+      }
       const mutableSuffix =
         rowIndex === 2 &&
         (variant === "coordinate" ||
@@ -566,7 +571,8 @@ export function renderAnonymousIconStays(url?: URL) {
   </article></main></body></html>`;
 }
 
-export function renderMultiDocumentCoding() {
+export function renderMultiDocumentCoding(url?: URL) {
+  const delayedSelection = Boolean(url?.searchParams.get("variant"));
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Codage étage synthétique</title>
   <style>${baseStyles}</style></head><body>
   <div class="lab">LAB MODE — SYNTHETIC MULTI-DOCUMENT WORKFLOW ONLY</div>
@@ -574,7 +580,7 @@ export function renderMultiDocumentCoding() {
   <form name="ngap-coding" class="record-grid">
     <section aria-labelledby="ngap-heading"><h2 id="ngap-heading">Code NGAP</h2>
       <label for="ngap-code">Acte NGAP</label>
-      <select id="ngap-code" name="ngap_code">
+      <select id="ngap-code" name="ngap_code"${delayedSelection ? ' style="display:none"' : ""}>
         <option value="">Choisir</option>
         <option value="110">Acte administratif</option>
         <option value="214">Consultation NGAP</option>
@@ -587,6 +593,7 @@ export function renderMultiDocumentCoding() {
   <script>
     const select = document.querySelector('#ngap-code');
     const status = document.querySelector('[data-vc-outcome]');
+    ${delayedSelection ? "setTimeout(() => { select.style.display = ''; }, 400);" : ""}
     select.addEventListener('change', () => {
       status.textContent = select.value === '214' ? 'Code 214 sélectionné.' : 'Sélection modifiée.';
       queueMicrotask(() => select.dispatchEvent(new MouseEvent('click', { bubbles: true })));

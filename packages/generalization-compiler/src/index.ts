@@ -1402,8 +1402,18 @@ function generatedLocator(
     rule.strategy === "same-row-column"
   ) {
     const href = rule.canonicalHref ? new URL(rule.canonicalHref) : undefined;
+    const hrefBasename = href?.pathname.split("/").filter(Boolean).at(-1);
     const hrefSelector = href
-      ? `a[href^=${JSON.stringify(href.pathname)}],a[href^=${JSON.stringify(`${href.origin}${href.pathname}`)}]`
+      ? [
+          `a[href^=${JSON.stringify(href.pathname)}]`,
+          `a[href^=${JSON.stringify(`${href.origin}${href.pathname}`)}]`,
+          ...(hrefBasename
+            ? [
+                `a[href^=${JSON.stringify(hrefBasename)}]`,
+                `a[href^=${JSON.stringify(`./${hrefBasename}`)}]`,
+              ]
+            : []),
+        ].join(",")
       : "a[href],a[onclick],[role=link]";
     const iconSelector = rule.iconAlt
       ? `img[alt=${JSON.stringify(rule.iconAlt)}],[role=img][aria-label=${JSON.stringify(rule.iconAlt)}]`

@@ -31,7 +31,11 @@ import {
   resolveValueReference,
   type LocalVariableValues,
 } from "../../workflow-variables/src";
-import { canonicalizeUrl, isOpenAIUrl } from "../../shared/src";
+import {
+  canonicalizeUrl,
+  escapeForAttribute,
+  isOpenAIUrl,
+} from "../../shared/src";
 
 export type RuntimeAnimation = {
   beforeStep?: (details: {
@@ -162,10 +166,25 @@ function runtimeLocatorAttempts(step: CompiledStep) {
   for (const candidate of ranked) {
     attempts.push({ candidate, rule: candidate.rule });
     const rule = candidate.rule;
+    const anonymousStructuralIcon =
+      rule.strategy === "row-icon-context" &&
+      Boolean(rule.iconTag) &&
+      !rule.iconAlt &&
+      !rule.iconTitle &&
+      !rule.iconSrc;
     const rowTexts =
       rule.strategy === "row-icon-context"
         ? (rule.rowTexts ?? (rule.rowText ? [rule.rowText] : []))
         : [];
+    if (anonymousStructuralIcon) {
+      attempts.push({
+        candidate,
+        rule: {
+          ...rule,
+          iconTag: undefined,
+        },
+      });
+    }
     if (rowTexts.length > 1) {
       for (
         let omittedIndex = 0;
@@ -183,6 +202,17 @@ function runtimeLocatorAttempts(step: CompiledStep) {
             rowTexts: retainedRowTexts,
           },
         });
+        if (anonymousStructuralIcon) {
+          attempts.push({
+            candidate,
+            rule: {
+              ...rule,
+              rowText: retainedRowTexts[0],
+              rowTexts: retainedRowTexts,
+              iconTag: undefined,
+            },
+          });
+        }
       }
     }
     if (
@@ -198,6 +228,7 @@ function runtimeLocatorAttempts(step: CompiledStep) {
           strategy: "same-row-column",
           rowText: undefined,
           rowTexts: undefined,
+          ...(anonymousStructuralIcon ? { iconTag: undefined } : {}),
         },
       });
     }
@@ -302,9 +333,21 @@ export class DeterministicRuntime {
     try {
       await this.#resolveInitialContexts();
       await this.#captureOutcomeBaselines();
-      for (const step of this.#workflow.steps) {
+      for (const [stepIndex, step] of this.#workflow.steps.entries()) {
         throwIfStopped(this.options.signal);
         const started = Date.now();
+        if (this.#isRedundantLegacySelectionClick(step, stepIndex)) {
+          telemetry.steps.push({
+            stepId: step.id,
+            pageContextId: step.pageContextId,
+            action: step.action,
+            status: "skipped",
+            durationMs: Date.now() - started,
+            message:
+              "Skipped a redundant legacy click surrounding the demonstrated select action.",
+          });
+          continue;
+        }
         try {
           const result = await this.#runStep(step);
           telemetry.steps.push({
@@ -638,21 +681,75 @@ export class DeterministicRuntime {
       step,
       phase: "Resolving target",
     });
-    for (const { candidate, rule } of runtimeLocatorAttempts(step)) {
-      const locator = locatorForRule(root, rule);
-      if ((await locator.count().catch(() => 0)) !== 1) continue;
-      if (!(await locator.isVisible().catch(() => false))) continue;
-      if (!(await locator.isEnabled().catch(() => false))) continue;
-      if (
-        ["fill", "select"].includes(step.action) &&
-        !(await locator.isEditable().catch(() => false))
-      )
-        continue;
-      return { locator, candidate };
-    }
+    const deadline = Date.now() + this.#timeout;
+    do {
+      for (const { candidate, rule } of runtimeLocatorAttempts(step)) {
+        const locator = locatorForRule(root, rule);
+        if ((await locator.count().catch(() => 0)) !== 1) continue;
+        if (!(await locator.isVisible().catch(() => false))) continue;
+        if (!(await locator.isEnabled().catch(() => false))) continue;
+        if (
+          ["fill", "select"].includes(step.action) &&
+          !(await locator.isEditable().catch(() => false))
+        )
+          continue;
+        return { locator, candidate };
+      }
+      if (step.action === "select") {
+        const demonstratedValue = this.#resolveStepValue(step);
+        if (demonstratedValue !== undefined) {
+          const optionSelector = `option[value="${escapeForAttribute(demonstratedValue)}"]`;
+          const selectionSelector = `select:has(${optionSelector})`;
+          const formNames = [
+            ...new Set(
+              step.locatorCandidates
+                .map((candidate) => candidate.rule.formName)
+                .filter((value): value is string => Boolean(value)),
+            ),
+          ];
+          const selectors = [
+            ...formNames.map(
+              (formName) =>
+                `form[name="${escapeForAttribute(formName)}"] ${selectionSelector}`,
+            ),
+            selectionSelector,
+          ];
+          for (const selector of selectors) {
+            const locator = root.locator(selector);
+            if ((await locator.count().catch(() => 0)) !== 1) continue;
+            if (!(await locator.isVisible().catch(() => false))) continue;
+            if (!(await locator.isEnabled().catch(() => false))) continue;
+            if (!(await locator.isEditable().catch(() => false))) continue;
+            return {
+              locator,
+              candidate: selectedFirst(step)[0],
+            };
+          }
+        }
+      }
+      if (Date.now() >= deadline) break;
+      await waitForAbortableTimeout(50, this.options.signal);
+    } while (true);
     throw new Error(
       `No deterministic locator resolved the demonstrated target for ${step.name}.`,
     );
+  }
+
+  #isRedundantLegacySelectionClick(step: CompiledStep, stepIndex: number) {
+    if (
+      step.action !== "click" ||
+      step.target?.descriptor?.controlFamily !== "selection" ||
+      !step.target.fingerprint
+    )
+      return false;
+    return [stepIndex - 1, stepIndex + 1].some((neighborIndex) => {
+      const neighbor = this.#workflow.steps[neighborIndex];
+      return (
+        neighbor?.action === "select" &&
+        neighbor.pageContextId === step.pageContextId &&
+        neighbor.target?.fingerprint === step.target?.fingerprint
+      );
+    });
   }
 
   async #readEditableValue(locator: Locator) {

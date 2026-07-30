@@ -73,7 +73,7 @@ export function createSyntheticDpiServer() {
     if (url.pathname === "/fixture/anonymous-icon/sejours.cgi")
       return html(response, renderAnonymousIconStays(url));
     if (url.pathname === "/fixture/anonymous-icon/codage_etage.cgi")
-      return html(response, renderMultiDocumentCoding());
+      return html(response, renderMultiDocumentCoding(url));
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("Synthetic fixture not found");
   });

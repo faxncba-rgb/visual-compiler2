@@ -312,7 +312,6 @@ export function generateLocatorCandidates(
           strategy: "same-row-column",
           rowIndex: click.table.rowIndex,
           columnIndex: click.table.columnIndex,
-          iconTag: click.icon.tag,
           ...(click.table.headers[click.table.columnIndex]
             ? {
                 columnHeader: click.table.headers[click.table.columnIndex],
@@ -545,7 +544,18 @@ function canonicalHrefSelector(value: string) {
   const url = new URL(value);
   const pathname = escapeForAttribute(url.pathname || "/");
   const canonical = escapeForAttribute(`${url.origin}${url.pathname || "/"}`);
-  return `a[href^="${pathname}"],a[href^="${canonical}"]`;
+  const basename = url.pathname.split("/").filter(Boolean).at(-1);
+  const selectors = [
+    `a[href^="${pathname}"]`,
+    `a[href^="${canonical}"]`,
+    ...(basename
+      ? [
+          `a[href^="${escapeForAttribute(basename)}"]`,
+          `a[href^="./${escapeForAttribute(basename)}"]`,
+        ]
+      : []),
+  ];
+  return selectors.join(",");
 }
 
 function iconEvidenceSelector(rule: LocatorRule) {
