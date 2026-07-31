@@ -20,12 +20,17 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
         .getByRole("button", { name: "Ouvrir le texte source", exact: true })
         .click();
       const sourcePopup = await sourcePromise;
-      const sourceZone = sourcePopup.locator('[data-vc-field="dho-copy-zone"]');
+      const sourceZone = sourcePopup
+        .locator('[data-vc-field="dho-copy-zone"] > span')
+        .last();
       await sourceZone.selectText();
       await sourcePopup.keyboard.press("ControlOrMeta+c");
       await sourcePopup.waitForEvent("close");
 
       await page.getByLabel("Première case DHO", { exact: true }).fill("101");
+      await page
+        .getByLabel("Première case DHO", { exact: true })
+        .press("Enter");
       await page.getByLabel("Entente Directe", { exact: true }).check();
 
       const validationPromise = page.waitForEvent("popup");
@@ -122,10 +127,23 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
             ["Meta+c", "Control+c"].includes(step.key ?? ""),
         ),
       ).toBe(false);
+      expect(
+        workflow.steps.some((step, index) => {
+          const previous = workflow.steps[index - 1];
+          return (
+            step.action === "submit" &&
+            previous?.action === "click" &&
+            previous.pageContextId === step.pageContextId &&
+            previous.target?.fingerprint === step.target?.fingerprint
+          );
+        }),
+      ).toBe(false);
 
       await page.evaluate(() => {
         sessionStorage.setItem("vc2-dho-results", "[]");
         sessionStorage.removeItem("vc2-dho-current");
+        sessionStorage.setItem("vc2-dho-uniform-labels", "true");
+        sessionStorage.setItem("vc2-dho-remove-processed", "true");
       });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
       const firstRun = await new DeterministicRuntime({

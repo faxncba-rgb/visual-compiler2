@@ -368,6 +368,7 @@ export class DeterministicRuntime {
   readonly #outcomeBaselines = new Map<string, string | number>();
   readonly #extractionAudit: RuntimeTelemetry["extractionAudit"] = [];
   #loopIteration = 0;
+  #loopAnchorOrdinal = 0;
   #routeInstalled = false;
   #networkHandler: ((route: Route) => Promise<void>) | undefined;
   #dialogHandler: ((dialog: Dialog) => Promise<void>) | undefined;
@@ -411,7 +412,16 @@ export class DeterministicRuntime {
         this.#resetIterationState();
         await this.#resolveInitialContexts();
         if (loop?.duplicateItemProtection) {
-          const fingerprint = await this.#currentLoopItemFingerprint(loop);
+          const fingerprint = await this.#currentLoopItemFingerprint(
+            loop,
+            loopFingerprints,
+          );
+          if (!fingerprint) {
+            telemetry.redactedLog.push(
+              `Completed all ${completedIterations} available unique records before the configured maximum of ${requestedIterations}.`,
+            );
+            break;
+          }
           if (loopFingerprints.has(fingerprint)) {
             duplicateProtectionTriggered = true;
             throw new Error(
@@ -458,6 +468,17 @@ export class DeterministicRuntime {
               status: "skipped",
               durationMs: Date.now() - started,
               message: `${iterationLabel}Skipped a redundant legacy click surrounding the demonstrated select action.`,
+            });
+            continue;
+          }
+          if (this.#isRedundantSubmit(step, stepIndex)) {
+            telemetry.steps.push({
+              stepId: step.id,
+              pageContextId: step.pageContextId,
+              action: step.action,
+              status: "skipped",
+              durationMs: Date.now() - started,
+              message: `${iterationLabel}Skipped the duplicate submit event emitted by the already executed submit control click.`,
             });
             continue;
           }
@@ -637,29 +658,135 @@ export class DeterministicRuntime {
     );
   }
 
-  async #currentLoopItemFingerprint(loop: CompiledLoop) {
+  async #fingerprintLoopAnchor(locator: Locator) {
+    const signature = await locator.evaluate(async (element) => {
+      const row = element.closest("tr,[role=row],li");
+      let identityEvidence = "";
+      let evidenceNode: Element | null = element;
+      while (evidenceNode) {
+        const tagName = evidenceNode.tagName.toLowerCase();
+        if (
+          tagName === "tr" ||
+          tagName === "li" ||
+          tagName === "form" ||
+          evidenceNode.getAttribute("role") === "row"
+        )
+          identityEvidence += evidenceNode.outerHTML;
+        evidenceNode = evidenceNode.parentElement;
+      }
+      const structuralPosition: string[] = [];
+      let current: Element | null = element;
+      while (current?.parentElement) {
+        const parent: Element = current.parentElement;
+        structuralPosition.push(
+          `${current.tagName.toLowerCase()}:${Array.from(parent.children).indexOf(current)}`,
+        );
+        current = parent;
+      }
+      const anchor =
+        element instanceof HTMLAnchorElement ? element : element.closest("a");
+      const href = anchor?.href ?? "";
+      let canonicalPeerOrdinal = -1;
+      if (anchor) {
+        const anchorUrl = new URL(anchor.href);
+        const canonicalHref = `${anchorUrl.origin}${anchorUrl.pathname}`;
+        let matchingPeerCount = 0;
+        const links = document.querySelectorAll("a[href]");
+        for (const link of links) {
+          if (!(link instanceof HTMLAnchorElement)) continue;
+          const linkUrl = new URL(link.href);
+          if (`${linkUrl.origin}${linkUrl.pathname}` !== canonicalHref)
+            continue;
+          if (link === anchor) {
+            canonicalPeerOrdinal = matchingPeerCount;
+            break;
+          }
+          matchingPeerCount += 1;
+        }
+      }
+      const rowText = String(row?.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const hrefDigestBytes = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(href)),
+      );
+      let hrefDigest = "";
+      for (const byte of hrefDigestBytes)
+        hrefDigest += byte.toString(16).padStart(2, "0");
+      const rowDigestBytes = new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(rowText),
+        ),
+      );
+      let rowDigest = "";
+      for (const byte of rowDigestBytes)
+        rowDigest += byte.toString(16).padStart(2, "0");
+      const identityDigestBytes = new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(identityEvidence),
+        ),
+      );
+      let identityDigest = "";
+      for (const byte of identityDigestBytes)
+        identityDigest += byte.toString(16).padStart(2, "0");
+      return [
+        element.tagName.toLowerCase(),
+        hrefDigest,
+        rowDigest,
+        identityDigest,
+        String(canonicalPeerOrdinal),
+        structuralPosition.join("/"),
+      ].join("|");
+    });
+    return sha256(signature);
+  }
+
+  async #currentLoopItemFingerprint(
+    loop: CompiledLoop,
+    seenFingerprints: ReadonlySet<string>,
+  ) {
     const anchor = this.#loopAnchorStep(loop);
     if (!anchor) return sha256(`${loop.id}:${this.#loopIteration}`);
-    const { locator } = await this.#resolveLocator(anchor);
+    const canonicalHref = runtimeLocatorAttempts(anchor).find(({ rule }) =>
+      Boolean(rule.canonicalHref),
+    )?.rule.canonicalHref;
+    if (canonicalHref) {
+      const root = await this.#resolveContext(anchor);
+      const canonicalLinks = locatorForRule(root, {
+        strategy: "canonical-href",
+        canonicalHref,
+      });
+      const count = await canonicalLinks.count().catch(() => 0);
+      for (let ordinal = 0; ordinal < count; ordinal += 1) {
+        const locator = canonicalLinks.nth(ordinal);
+        if (!(await locator.isVisible().catch(() => false))) continue;
+        if (!(await locator.isEnabled().catch(() => false))) continue;
+        const fingerprint = await this.#fingerprintLoopAnchor(locator);
+        if (seenFingerprints.has(fingerprint)) continue;
+        this.#loopAnchorOrdinal = ordinal;
+        return fingerprint;
+      }
+      if (this.#loopIteration > 0) return undefined;
+    }
+    let resolved: {
+      locator?: Locator;
+      candidate?: LocatorCandidate | undefined;
+    };
+    try {
+      resolved = await this.#resolveLocator(anchor);
+    } catch (error) {
+      if (this.#loopIteration > 0) return undefined;
+      throw error;
+    }
+    const { locator } = resolved;
+    if (!locator && this.#loopIteration > 0) return undefined;
     if (!locator)
       throw new Error(
         "The bounded workflow has no deterministic record anchor.",
       );
-    const signature = await locator.evaluate((element) => {
-      const row = element.closest("tr,[role=row],li");
-      const href =
-        element instanceof HTMLAnchorElement
-          ? new URL(element.href).pathname
-          : "";
-      return [
-        element.tagName.toLowerCase(),
-        href,
-        String(row?.textContent ?? "")
-          .replace(/\s+/g, " ")
-          .trim(),
-      ].join("|");
-    });
-    return sha256(signature);
+    return this.#fingerprintLoopAnchor(locator);
   }
 
   #recordKeywordAudit(variableName: string, keyword: string, matched: boolean) {
@@ -903,6 +1030,7 @@ export class DeterministicRuntime {
         throw new Error(
           `Expected popup context ${pageContext.id} is not open.`,
         );
+      await this.#waitForExpectedPopupDocument(popup, pageContext.id);
       this.#pages.resolved.set(pageContext.id, popup);
       return popup;
     }
@@ -959,7 +1087,135 @@ export class DeterministicRuntime {
     return page;
   }
 
-  async #resolveLocator(step: CompiledStep) {
+  async #waitForExpectedPopupDocument(popup: Page, pageContextId: string) {
+    const expected = this.#workflow.pageContexts.find(
+      (candidate) => candidate.id === pageContextId,
+    );
+    if (!expected || canonicalMatches(popup.url(), expected)) return;
+    await popup.waitForURL(
+      (url) => canonicalMatches(url.toString(), expected),
+      {
+        waitUntil: "domcontentloaded",
+        timeout: this.#timeout,
+      },
+    );
+  }
+
+  #waitForExpectedPopup(pageContextId: string) {
+    const expected = this.#workflow.pageContexts.find(
+      (candidate) => candidate.id === pageContextId,
+    );
+    if (!expected)
+      return Promise.reject(
+        new Error(`Unknown expected popup context ${pageContextId}.`),
+      );
+    const existingPages = new Set(this.options.context.pages());
+    return new Promise<Page>((resolve, reject) => {
+      const observedCanonicalPaths = new Set<string>();
+      const pageListeners = new Map<Page, (frame: Frame) => void>();
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.options.context.off("page", onPage);
+        for (const [page, listener] of pageListeners)
+          page.off("framenavigated", listener);
+      };
+      const finish = (page: Page) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(page);
+      };
+      const inspect = (page: Page) => {
+        if (page.isClosed()) return;
+        try {
+          const canonical = canonicalizeUrl(page.url());
+          observedCanonicalPaths.add(
+            `${canonical.origin}${canonical.pathname}`,
+          );
+        } catch {
+          observedCanonicalPaths.add("non-canonical-popup");
+        }
+        if (canonicalMatches(page.url(), expected)) finish(page);
+      };
+      const onPage = (page: Page) => {
+        if (existingPages.has(page) || pageListeners.has(page)) return;
+        const listener = (frame: Frame) => {
+          if (frame === page.mainFrame()) inspect(page);
+        };
+        pageListeners.set(page, listener);
+        page.on("framenavigated", listener);
+        inspect(page);
+      };
+      this.options.context.on("page", onPage);
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(
+          new Error(
+            `Expected popup document did not open. Redacted observed paths: ${JSON.stringify([...observedCanonicalPaths])}.`,
+          ),
+        );
+      }, this.#timeout);
+    });
+  }
+
+  async #closeReadOnlyPopupAfterExtraction(step: CompiledStep) {
+    const pageContext = this.#workflow.pageContexts.find(
+      (candidate) => candidate.id === step.pageContextId,
+    );
+    if (pageContext?.role !== "popup") return;
+    const hasExplicitClose = this.#workflow.steps.some(
+      (candidate) =>
+        candidate.action === "popup-close" &&
+        candidate.pageContextId === step.pageContextId,
+    );
+    if (hasExplicitClose) return;
+    await waitForAbortableTimeout(100, this.options.signal);
+    const popup = this.#pages.runtimePopups.get(step.pageContextId);
+    if (popup && !popup.isClosed()) await popup.close();
+    this.#pages.closedContexts.add(step.pageContextId);
+    this.#pages.resolved.delete(step.pageContextId);
+  }
+
+  async #waitForPopupClosure(popup: Page) {
+    const deadline = Date.now() + this.#timeout;
+    while (!popup.isClosed() && Date.now() < deadline) {
+      throwIfStopped(this.options.signal);
+      await waitForAbortableTimeout(20, this.options.signal);
+    }
+    if (!popup.isClosed())
+      throw new Error("Expected popup did not close within the step timeout.");
+  }
+
+  async #resolveLegacyDynamicFormControl(
+    root: LocatorRoot,
+    step: CompiledStep,
+  ): Promise<
+    { locator: Locator; candidate: LocatorCandidate | undefined } | undefined
+  > {
+    if (!step.target || !["fill", "select", "keyboard"].includes(step.action))
+      return;
+    const recordedName = step.target.stableAttributes.name;
+    const dynamicNameMatch = recordedName?.match(/^(.+_)\d+$/);
+    if (!dynamicNameMatch?.[1]) return;
+    const tagName = step.target.tag;
+    if (!["input", "select", "textarea"].includes(tagName)) return;
+    const locator = root
+      .locator(`${tagName}[name^="${escapeForAttribute(dynamicNameMatch[1])}"]`)
+      .first();
+    if ((await locator.count().catch(() => 0)) !== 1) return;
+    if (!(await locator.isVisible().catch(() => false))) return;
+    if (!(await locator.isEnabled().catch(() => false))) return;
+    if (!(await locator.isEditable().catch(() => false))) return;
+    return { locator, candidate: selectedFirst(step)[0] };
+  }
+
+  async #resolveLocator(step: CompiledStep): Promise<{
+    locator?: Locator;
+    candidate?: LocatorCandidate | undefined;
+  }> {
     if (!step.target) return {};
     const root = await this.#resolveContext(step);
     await this.options.animation?.beforeStep?.({
@@ -967,19 +1223,44 @@ export class DeterministicRuntime {
       phase: "Resolving target",
     });
     const deadline = Date.now() + this.#timeout;
+    let lastAttemptEvidence: Array<{
+      strategy: LocatorCandidate["strategy"];
+      count: number;
+      visible: boolean;
+      enabled: boolean | "not-required";
+      editable: boolean | "not-required";
+    }> = [];
     do {
+      const currentAttemptEvidence: typeof lastAttemptEvidence = [];
       for (const { candidate, rule } of this.#locatorAttempts(step)) {
         const locator = locatorForRule(root, rule);
-        if ((await locator.count().catch(() => 0)) !== 1) continue;
-        if (!(await locator.isVisible().catch(() => false))) continue;
-        if (!(await locator.isEnabled().catch(() => false))) continue;
-        if (
-          ["fill", "select"].includes(step.action) &&
-          !(await locator.isEditable().catch(() => false))
-        )
+        const count = await locator.count().catch(() => 0);
+        const visible =
+          count === 1 && (await locator.isVisible().catch(() => false));
+        const enabled =
+          step.action === "extract"
+            ? "not-required"
+            : count === 1 && (await locator.isEnabled().catch(() => false));
+        const editable = ["fill", "select"].includes(step.action)
+          ? count === 1 && (await locator.isEditable().catch(() => false))
+          : "not-required";
+        currentAttemptEvidence.push({
+          strategy: candidate.strategy,
+          count,
+          visible,
+          enabled,
+          editable,
+        });
+        if (count !== 1 || !visible || enabled === false || editable === false)
           continue;
         return { locator, candidate };
       }
+      lastAttemptEvidence = currentAttemptEvidence;
+      const dynamicFormControl = await this.#resolveLegacyDynamicFormControl(
+        root,
+        step,
+      );
+      if (dynamicFormControl) return dynamicFormControl;
       if (step.action === "select") {
         const demonstratedValue = this.#resolveStepValue(step);
         if (demonstratedValue !== undefined) {
@@ -1016,7 +1297,7 @@ export class DeterministicRuntime {
       await waitForAbortableTimeout(50, this.options.signal);
     } while (true);
     throw new Error(
-      `No deterministic locator resolved the demonstrated target for ${step.name}.`,
+      `No deterministic locator resolved the demonstrated target for ${step.name}. Redacted locator evidence: ${JSON.stringify(lastAttemptEvidence)}.`,
     );
   }
 
@@ -1026,7 +1307,6 @@ export class DeterministicRuntime {
     const anchor = loop ? this.#loopAnchorStep(loop) : undefined;
     if (
       !loop ||
-      this.#loopIteration === 0 ||
       anchor?.id !== step.id ||
       loop.nextItemRelationship !== "next-row"
     )
@@ -1039,7 +1319,7 @@ export class DeterministicRuntime {
               rule: {
                 ...rule,
                 strategy: "same-row-column" as const,
-                rowIndex: rule.rowIndex + this.#loopIteration,
+                ordinal: this.#loopAnchorOrdinal,
                 rowText: undefined,
                 rowTexts: undefined,
                 iconAlt: undefined,
@@ -1051,7 +1331,21 @@ export class DeterministicRuntime {
           ]
         : [],
     );
-    return [...shifted, ...attempts];
+    const canonicalOrdinal = attempts.flatMap(({ candidate, rule }) =>
+      rule.canonicalHref
+        ? [
+            {
+              candidate,
+              rule: {
+                strategy: "canonical-href" as const,
+                canonicalHref: rule.canonicalHref,
+                ordinal: this.#loopAnchorOrdinal,
+              },
+            },
+          ]
+        : [],
+    );
+    return [...canonicalOrdinal, ...shifted];
   }
 
   #isRedundantLegacySelectionClick(step: CompiledStep, stepIndex: number) {
@@ -1071,6 +1365,16 @@ export class DeterministicRuntime {
     });
   }
 
+  #isRedundantSubmit(step: CompiledStep, stepIndex: number) {
+    if (step.action !== "submit" || !step.target?.fingerprint) return false;
+    const previous = this.#workflow.steps[stepIndex - 1];
+    return (
+      previous?.action === "click" &&
+      previous.pageContextId === step.pageContextId &&
+      previous.target?.fingerprint === step.target.fingerprint
+    );
+  }
+
   async #readEditableValue(locator: Locator) {
     return locator.evaluate((element) => {
       if (
@@ -1083,7 +1387,112 @@ export class DeterministicRuntime {
     });
   }
 
+  #extractionTransforms(step: CompiledStep) {
+    if (!step.outputVariable) return [];
+    return this.#workflow.steps
+      .filter(
+        (candidate) =>
+          candidate.value?.kind === "runtime-variable" &&
+          candidate.value.name === step.outputVariable,
+      )
+      .flatMap((candidate) => candidate.valueTransforms);
+  }
+
+  #satisfiesExtractionTransforms(
+    value: string,
+    transforms: CompiledStep["valueTransforms"],
+  ) {
+    if (transforms.length === 0) return true;
+    try {
+      applyRuntimeValueTransforms(value, transforms);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async #recoverNearbyExtractedValue(
+    step: CompiledStep,
+    locator: Locator,
+    originalValue: string,
+  ) {
+    const transforms = this.#extractionTransforms(step);
+    if (transforms.length === 0) return;
+    const candidates = await locator
+      .evaluate((element) => {
+        const results: Array<{
+          value: string;
+          depth: number;
+          sameTag: boolean;
+          descendantElements: number;
+        }> = [];
+        const seen = new Set<Element>();
+        let scope = element.parentElement;
+        for (
+          let depth = 0;
+          depth < 5 && scope && scope !== document.body;
+          depth += 1, scope = scope.parentElement
+        ) {
+          const selector = [
+            element.tagName.toLowerCase(),
+            "span",
+            "p",
+            "pre",
+            "textarea",
+            "td",
+            "div",
+          ].join(",");
+          for (const node of scope.querySelectorAll(selector)) {
+            if (node === element || seen.has(node)) continue;
+            seen.add(node);
+            const box = node.getBoundingClientRect();
+            if (box.width <= 0 || box.height <= 0) continue;
+            const value =
+              node instanceof HTMLInputElement ||
+              node instanceof HTMLTextAreaElement
+                ? node.value
+                : (node.textContent ?? "");
+            if (!value.trim() || value.length > 20_000) continue;
+            results.push({
+              value,
+              depth,
+              sameTag: node.tagName === element.tagName,
+              descendantElements: node.querySelectorAll("*").length,
+            });
+            if (results.length >= 256) return results;
+          }
+        }
+        return results;
+      })
+      .catch(() => []);
+    const eligible = candidates.flatMap((candidate) => {
+      if (candidate.value === originalValue) return [];
+      try {
+        const transformed = applyRuntimeValueTransforms(
+          candidate.value,
+          transforms,
+        );
+        const score =
+          (transformed.audit.excludedNumericCandidates > 0 ? 100_000 : 0) +
+          (candidate.sameTag ? 10_000 : 0) -
+          candidate.depth * 1_000 -
+          candidate.descendantElements * 10 -
+          Math.min(candidate.value.length, 20_000) / 100;
+        return [{ ...candidate, score }];
+      } catch {
+        return [];
+      }
+    });
+    eligible.sort((left, right) => right.score - left.score);
+    const selected = eligible[0];
+    if (!selected) return;
+    const runnerUp = eligible[1];
+    if (runnerUp && Math.abs(selected.score - runnerUp.score) < 0.001) return;
+    return selected.value;
+  }
+
   async #readExtractedValue(step: CompiledStep, locator: Locator) {
+    const transforms = this.#extractionTransforms(step);
     if (step.extractionSelection?.mode === "text-range") {
       const result = await locator
         .evaluate((element, evidence) => {
@@ -1119,13 +1528,37 @@ export class DeterministicRuntime {
           return { value: range.toString(), replayed: true };
         }, step.extractionSelection)
         .catch(() => undefined);
-      if (result) return result;
+      if (
+        result &&
+        this.#satisfiesExtractionTransforms(result.value, transforms)
+      )
+        return result;
+      if (result) {
+        const recovered = await this.#recoverNearbyExtractedValue(
+          step,
+          locator,
+          result.value,
+        );
+        if (recovered !== undefined)
+          return { value: recovered, replayed: false };
+        return result;
+      }
     }
     await locator.selectText().catch(() => undefined);
-    return {
+    const result = {
       value: await this.#readEditableValue(locator),
       replayed: step.extractionSelection?.mode === "element",
     };
+    if (this.#satisfiesExtractionTransforms(result.value, transforms))
+      return result;
+    const recovered = await this.#recoverNearbyExtractedValue(
+      step,
+      locator,
+      result.value,
+    );
+    return recovered === undefined
+      ? result
+      : { value: recovered, replayed: false };
   }
 
   async #verifyEnteredValue(
@@ -1273,9 +1706,7 @@ export class DeterministicRuntime {
         throw new Error(
           `Expected popup ${step.pageContextId} was never observed.`,
         );
-      if (!popup.isClosed()) {
-        await popup.waitForEvent("close", { timeout: this.#timeout });
-      }
+      await this.#waitForPopupClosure(popup);
       this.#pages.closedContexts.add(step.pageContextId);
       return {
         message: "Expected popup closed and opener remained available.",
@@ -1351,10 +1782,7 @@ export class DeterministicRuntime {
 
     let popupPromise: Promise<Page> | undefined;
     if (step.expectsPopupContextId) {
-      const root = await this.#resolveContext(step);
-      const opener =
-        "mainFrame" in root ? (root as Page) : (root as Frame).page();
-      popupPromise = opener.waitForEvent("popup", { timeout: this.#timeout });
+      popupPromise = this.#waitForExpectedPopup(step.expectsPopupContextId);
     }
     let usedInputStrategy: string | undefined;
     if (step.action === "extract") {
@@ -1377,6 +1805,7 @@ export class DeterministicRuntime {
         keywordChecks: [],
         rawTextPersisted: false,
       });
+      await this.#closeReadOnlyPopupAfterExtraction(step);
     } else if (step.action === "click")
       await locator.click({ timeout: this.#timeout });
     else if (step.action === "double-click")
@@ -1430,9 +1859,7 @@ export class DeterministicRuntime {
         this.#pages.closedContexts.add(step.expectsPopupContextId!);
       });
       await popup.waitForLoadState("domcontentloaded").catch(() => undefined);
-      if (step.expectsPopupClosure && !popup.isClosed()) {
-        await popup.waitForEvent("close", { timeout: this.#timeout });
-      }
+      if (step.expectsPopupClosure) await this.#waitForPopupClosure(popup);
     }
     await this.options.animation?.beforeStep?.({
       step,

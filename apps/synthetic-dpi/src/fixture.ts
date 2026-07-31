@@ -325,20 +325,35 @@ export function renderDataflowDestination() {
 export function renderDhoBatchList() {
   const rows = Array.from({ length: 20 }, (_, index) => {
     const record = index + 1;
+    let action = `<a href="/fixture/dho-batch/entry" data-vc-action="code-record"
+        onclick="sessionStorage.setItem('vc2-dho-current', '${record}')">Coder ce dossier</a>`;
+    for (let depth = 0; depth < 30; depth += 1)
+      action = `<div data-vc-nesting="${depth}">${action}</div>`;
     return `<tr data-vc-record="${record}">
-      <td>Dossier synthétique ${String(record).padStart(2, "0")}</td>
-      <td><a href="/fixture/dho-batch/entry" data-vc-action="code-record"
-        onclick="sessionStorage.setItem('vc2-dho-current', '${record}')">Coder ce dossier</a></td>
+      <td data-vc-record-label>Dossier synthétique ${String(record).padStart(2, "0")}</td>
+      <td>${action}</td>
     </tr>`;
   }).join("");
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Lot DHO synthétique</title>
   <style>${baseStyles}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #ccd4ce;text-align:left}</style>
   </head><body><div class="lab">LAB MODE — SYNTHETIC DHO BATCH ONLY</div>
   <main><section aria-labelledby="batch-heading"><h1 id="batch-heading">Dossiers DHO synthétiques</h1>
-  <table><thead><tr><th>Dossier</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>
+  <table aria-label="Structure de page"><tbody><tr><td>
+    <table><thead><tr><th>Dossier</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>
+  </td></tr></tbody></table>
   <p data-vc-result-count></p></section></main>
   <script>
     const results = JSON.parse(sessionStorage.getItem('vc2-dho-results') || '[]');
+    if (sessionStorage.getItem('vc2-dho-remove-processed') === 'true') {
+      for (const result of results) {
+        document.querySelector('[data-vc-record="' + result.record + '"]')?.remove();
+      }
+    }
+    if (sessionStorage.getItem('vc2-dho-uniform-labels') === 'true') {
+      document.querySelectorAll('[data-vc-record-label]').forEach(label => {
+        label.textContent = 'Dossier synthétique';
+      });
+    }
     document.querySelector('[data-vc-result-count]').textContent =
       results.length + ' dossier(s) traité(s).';
   </script></body></html>`;
@@ -361,6 +376,8 @@ export function renderDhoBatchEntry() {
   </section></main>
   <script>
     const current = Number(sessionStorage.getItem('vc2-dho-current') || '1');
+    const dho = document.querySelector('[name="dho_1"]');
+    dho.name = 'dho_' + current;
     const master = document.querySelector('[name="entente_directe_tout"]');
     const managed = document.querySelector('[name="entente_directe_pending"]');
     managed.name = 'entente_directe_' + current;
@@ -378,7 +395,7 @@ export function renderDhoBatchEntry() {
       const results = JSON.parse(sessionStorage.getItem('vc2-dho-results') || '[]');
       results.push({
         record: current,
-        amount: document.querySelector('[name="dho_1"]').value,
+        amount: dho.value,
         directAgreement: master.checked
       });
       sessionStorage.setItem('vc2-dho-results', JSON.stringify(results));
@@ -392,14 +409,22 @@ export function renderDhoBatchSource() {
   <style>${baseStyles}</style></head><body><div class="lab">LAB MODE — SYNTHETIC SOURCE ONLY</div>
   <main><section aria-labelledby="source-dho-heading"><h1 id="source-dho-heading">Justificatif synthétique</h1>
   <p>Sélectionnez la zone démontrée.</p>
-  <span data-vc-field="dho-copy-zone"></span>
+  <div data-vc-field="dho-copy-zone"><span aria-hidden="true">&nbsp;</span></div>
   </section></main>
   <script>
     const current = Number(sessionStorage.getItem('vc2-dho-current') || '1');
     const amount = 100 + current;
     const method = current % 2 === 1 ? 'VIR confirmé' : 'Règlement standard';
-    document.querySelector('[data-vc-field="dho-copy-zone"]').textContent =
+    const zone = document.querySelector('[data-vc-field="dho-copy-zone"]');
+    if (current > 1) {
+      const structuralDecoy = document.createElement('span');
+      structuralDecoy.textContent = 'Zone structurelle sans montant admissible.';
+      zone.append(structuralDecoy);
+    }
+    const demonstratedSource = document.createElement('span');
+    demonstratedSource.textContent =
       'Référence exclue 53,90. ' + method + '. Montant ' + amount + '.';
+    zone.append(demonstratedSource);
     document.addEventListener('copy', () => setTimeout(() => window.close(), 80));
   </script></body></html>`;
 }
