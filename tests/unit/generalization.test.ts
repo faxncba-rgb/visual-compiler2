@@ -218,6 +218,156 @@ describe("strict AI generalization boundary", () => {
     });
   });
 
+  it("links an implicit popup to its demonstrated opener before the first popup action", async () => {
+    const demonstration = session();
+    const mainPage = demonstration.pages[0]!;
+    const popupPage = {
+      ...mainPage,
+      id: "popup-source-document",
+      pageId: "browser-popup-source",
+      role: "popup" as const,
+      parentId: mainPage.id,
+      pathname: "/source-popup",
+      structuralFingerprint: "popup-source-structure",
+      pageRole: "source-popup",
+      status: "closed" as const,
+    };
+    const openerTarget = target();
+    openerTarget.tag = "a";
+    openerTarget.role = "link";
+    openerTarget.accessibleName = "Open source";
+    delete openerTarget.associatedLabel;
+    openerTarget.editable = false;
+    openerTarget.stableAttributes = { "data-vc-action": "open-source" };
+    openerTarget.descriptor = {
+      ...openerTarget.descriptor!,
+      controlFamily: "link",
+      multiline: false,
+      editable: false,
+      actionCompatibility: ["click"],
+      tag: "a",
+      role: "link",
+      accessibleName: "Open source",
+      normalizedStaticText: "Open source",
+      hasOnclick: true,
+      rawTargetPromoted: true,
+    };
+    delete openerTarget.descriptor.associatedLabel;
+    const extractionTarget = target({
+      fingerprint: "popup-source-zone",
+      tag: "span",
+      role: undefined,
+      accessibleName: undefined,
+      associatedLabel: undefined,
+      editable: false,
+      stableAttributes: {},
+      structuralPath: "html > body > div:nth-of-type(3) > span",
+      descriptor: {
+        ...target().descriptor!,
+        controlFamily: "other",
+        multiline: false,
+        editable: false,
+        actionCompatibility: ["extract"],
+        tag: "span",
+        role: undefined,
+        accessibleName: undefined,
+        associatedLabel: undefined,
+        normalizedStaticText: undefined,
+        hasOnclick: false,
+        rawTargetPromoted: false,
+        frame: {
+          role: "main",
+          origin: popupPage.origin,
+          pathname: popupPage.pathname,
+        },
+      },
+      frame: {
+        role: "main",
+        origin: popupPage.origin,
+        pathname: popupPage.pathname,
+        structuralFingerprint: "popup-frame",
+      },
+      captureValidation: {
+        exactTargetConnected: true,
+        roleNameMatchCount: 0,
+        labelMatchCount: 0,
+        stableAttributeMatchCount: 0,
+      },
+      captureContext: { transient: true },
+    });
+    demonstration.pages = [mainPage, popupPage];
+    demonstration.pageGraph = {
+      rootId: mainPage.id,
+      nodes: [mainPage, popupPage],
+      edges: [
+        {
+          from: mainPage.id,
+          to: popupPage.id,
+          relation: "opened",
+          actionId: "open-source",
+        },
+      ],
+    };
+    demonstration.actions = [
+      {
+        id: "open-source",
+        pageContextId: mainPage.id,
+        action: "click",
+        name: "Open source popup",
+        target: openerTarget,
+        observedEffects: [],
+        timestampOffsetMs: 100,
+        optional: false,
+      },
+      {
+        id: "extract-source",
+        pageContextId: popupPage.id,
+        action: "extract",
+        name: "Copy demonstrated source zone",
+        target: extractionTarget,
+        outputVariable: "copied_text_1",
+        observedEffects: [],
+        timestampOffsetMs: 200,
+        optional: false,
+      },
+    ];
+    demonstration.variables = [
+      {
+        id: "runtime-copy",
+        name: "copied_text_1",
+        valueType: "string",
+        sourceActionId: "extract-source",
+        privacy: "runtime-derived",
+        required: true,
+      },
+    ];
+
+    const { workflow } = await compileDemonstration({
+      session: demonstration,
+      graph: {
+        resolveLiveTargetRoot: async () => ({
+          originalDomNodeReplaced: false,
+          semanticEquivalentFound: true,
+        }),
+      } as never,
+      localValues: {},
+      provider: new MockGeneralizationProvider(),
+    });
+
+    expect(
+      workflow.steps.find((step) => step.sourceActionId === "open-source"),
+    ).toMatchObject({
+      action: "click",
+      expectsPopupContextId: popupPage.id,
+    });
+    expect(
+      workflow.steps.find((step) => step.sourceActionId === "extract-source"),
+    ).toMatchObject({
+      action: "extract",
+      pageContextId: popupPage.id,
+    });
+  });
+
   it("uses GPT-5.6 Responses structured output exactly once without an SDK", async () => {
     const payload = buildAiPayload(session(), "", {});
     let request:

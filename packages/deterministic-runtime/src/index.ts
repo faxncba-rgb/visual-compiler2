@@ -7,6 +7,7 @@ import type {
   Route,
 } from "playwright";
 import {
+  attachImplicitPopupOpeners,
   CompiledWorkflowSchema,
   RuntimeTelemetrySchema,
   type CompiledLoop,
@@ -374,6 +375,10 @@ export class DeterministicRuntime {
 
   constructor(private readonly options: RuntimeOptions) {
     this.#workflow = CompiledWorkflowSchema.parse(options.workflow);
+    attachImplicitPopupOpeners(
+      this.#workflow.steps,
+      this.#workflow.pageContexts,
+    );
     this.#variables = LocalVariableValuesSchema.parse(options.variables);
     this.#timeout = options.stepTimeoutMs ?? 10_000;
   }

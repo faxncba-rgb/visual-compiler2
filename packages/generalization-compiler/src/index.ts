@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  attachImplicitPopupOpeners,
   CompiledWorkflowSchema,
   DemonstrationSessionSchema,
   LocatorStrategySchema,
@@ -1557,7 +1558,6 @@ async function compileSteps(
     const previous = [...steps.slice(0, index)]
       .reverse()
       .find((candidate) => candidate.action === "click");
-    if (previous) previous.expectsPopupContextId = step.pageContextId;
     const close = steps
       .slice(index + 1)
       .find(
@@ -1578,7 +1578,7 @@ async function compileSteps(
     if (close && previous && !hasPopupActionBeforeClose)
       previous.expectsPopupClosure = true;
   }
-  return steps;
+  return attachImplicitPopupOpeners(steps, session.pages);
 }
 
 function mergeInferredActions(

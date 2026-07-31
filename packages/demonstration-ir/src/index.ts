@@ -849,3 +849,45 @@ export type CompiledLoop = z.infer<typeof CompiledLoopSchema>;
 export type ApplicationOutcome = z.infer<typeof ApplicationOutcomeSchema>;
 export type CompiledWorkflow = z.infer<typeof CompiledWorkflowSchema>;
 export type RuntimeTelemetry = z.infer<typeof RuntimeTelemetrySchema>;
+
+export function attachImplicitPopupOpeners(
+  steps: CompiledStep[],
+  pageContexts: Array<
+    Pick<RecordedPageContext, "id" | "role" | "parentId" | "openerActionId">
+  >,
+) {
+  for (const popupContext of pageContexts) {
+    if (popupContext.role !== "popup") continue;
+    if (steps.some((step) => step.expectsPopupContextId === popupContext.id))
+      continue;
+    const firstPopupStepIndex = steps.findIndex(
+      (step) => step.pageContextId === popupContext.id,
+    );
+    if (firstPopupStepIndex < 0) continue;
+    const precedingSteps = steps.slice(0, firstPopupStepIndex);
+    const recordedOpener = popupContext.openerActionId
+      ? precedingSteps.find(
+          (step) => step.sourceActionId === popupContext.openerActionId,
+        )
+      : undefined;
+    const opener =
+      (recordedOpener?.action === "click" ? recordedOpener : undefined) ??
+      [...precedingSteps]
+        .reverse()
+        .find(
+          (step) =>
+            step.action === "click" &&
+            step.pageContextId !== popupContext.id &&
+            (!popupContext.parentId ||
+              step.pageContextId === popupContext.parentId),
+        ) ??
+      [...precedingSteps]
+        .reverse()
+        .find(
+          (step) =>
+            step.action === "click" && step.pageContextId !== popupContext.id,
+        );
+    if (opener) opener.expectsPopupContextId = popupContext.id;
+  }
+  return steps;
+}
