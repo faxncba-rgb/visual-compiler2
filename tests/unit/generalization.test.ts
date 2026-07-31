@@ -169,6 +169,55 @@ describe("strict AI generalization boundary", () => {
     });
   });
 
+  it("drops a GPT inference anchored to forensic copy-key noise", async () => {
+    const demonstration = session();
+    const demonstratedFill = demonstration.actions[0]!;
+    demonstration.actions = [
+      {
+        ...demonstratedFill,
+        id: "forensic-copy-key",
+        action: "keyboard",
+        key: "Meta+c",
+        keyboardScope: "page",
+        timestampOffsetMs: 100,
+      },
+      {
+        ...demonstratedFill,
+        id: "extract-source",
+        action: "extract",
+        outputVariable: "copied_text_1",
+        timestampOffsetMs: 110,
+      },
+    ];
+    const mock = new MockGeneralizationProvider();
+    const output = AiGeneralizationOutputSchema.parse(
+      await mock.generalize(buildAiPayload(demonstration, "", {})),
+    );
+    output.inferredActions.push({
+      action: "focus",
+      name: "Inferred focus after copy shortcut",
+      position: {
+        relativeToSourceActionId: "forensic-copy-key",
+        placement: "after",
+      },
+      pageContextId: "page-main",
+      evidenceRefs: ["forensic-copy-key"],
+      confidence: 0.92,
+      justification:
+        "The copied text was followed by a site-managed focus change.",
+      asPostcondition: false,
+    });
+
+    const normalized = validateAndNormalizeSemanticIr(output, demonstration);
+    expect(normalized.output.inferredActions).toEqual([]);
+    expect(normalized.diagnostics).toContainEqual({
+      level: "warning",
+      code: "GPT_FORENSIC_ANCHOR_INFERENCE_DROPPED",
+      message:
+        "1 inferred GPT action(s) targeted forensic-only browser noise and were ignored.",
+    });
+  });
+
   it("uses GPT-5.6 Responses structured output exactly once without an SDK", async () => {
     const payload = buildAiPayload(session(), "", {});
     let request:

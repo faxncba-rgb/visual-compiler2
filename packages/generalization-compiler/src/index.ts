@@ -561,6 +561,11 @@ export function validateAndNormalizeSemanticIr(
 ) {
   const output = SemanticIrSchema.parse(rawOutput);
   const actionIds = new Set(session.actions.map((action) => action.id));
+  const executableActionIds = new Set(
+    session.actions
+      .filter((_, index) => !isForensicOnlyAction(session.actions, index))
+      .map((action) => action.id),
+  );
   const pageContextIds = new Set(session.pages.map((page) => page.id));
   const evidenceIds = new Set([
     ...actionIds,
@@ -603,6 +608,7 @@ export function validateAndNormalizeSemanticIr(
 
   const inferredActions: AiGeneralizationOutput["inferredActions"] = [];
   let invalidInferredActionCount = 0;
+  let forensicAnchorInferenceCount = 0;
   for (const inferred of output.inferredActions) {
     const valid =
       actionIds.has(inferred.position.relativeToSourceActionId) &&
@@ -612,6 +618,10 @@ export function validateAndNormalizeSemanticIr(
       invalidInferredActionCount += 1;
       continue;
     }
+    if (!executableActionIds.has(inferred.position.relativeToSourceActionId)) {
+      forensicAnchorInferenceCount += 1;
+      continue;
+    }
     inferredActions.push(inferred);
   }
   if (invalidInferredActionCount > 0)
@@ -619,6 +629,12 @@ export function validateAndNormalizeSemanticIr(
       level: "warning",
       code: "GPT_UNGROUNDED_INFERRED_ACTION_DROPPED",
       message: `${invalidInferredActionCount} inferred GPT action(s) lacked a valid insertion point, document or evidence reference and were ignored.`,
+    });
+  if (forensicAnchorInferenceCount > 0)
+    diagnostics.push({
+      level: "warning",
+      code: "GPT_FORENSIC_ANCHOR_INFERENCE_DROPPED",
+      message: `${forensicAnchorInferenceCount} inferred GPT action(s) targeted forensic-only browser noise and were ignored.`,
     });
 
   const loops: AiGeneralizationOutput["loops"] = [];
