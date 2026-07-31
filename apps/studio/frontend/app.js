@@ -464,6 +464,25 @@ function render() {
     "No payload prepared.",
   );
   $("#runtimeLog").textContent = pretty(state.telemetry, "No local run yet.");
+  $("#extractionAudit").textContent = state.telemetry?.extractionAudit?.length
+    ? pretty({
+        privacy:
+          "Raw copied text and derived form values are never displayed or persisted.",
+        entries: state.telemetry.extractionAudit.map((entry) => ({
+          stepId: entry.stepId,
+          pageContextId: entry.pageContextId,
+          sourceFingerprint: entry.sourceFingerprint,
+          characterCount: entry.characterCount,
+          contentSha256: entry.contentSha256,
+          structuralSelectionReplayed: entry.structuralSelectionReplayed,
+          numericCandidates: entry.numericCandidates,
+          excludedNumericCandidates: entry.excludedNumericCandidates,
+          eligibleNumberFound: entry.eligibleNumberFound,
+          keywordChecks: entry.keywordChecks,
+          rawTextPersisted: entry.rawTextPersisted,
+        })),
+      })
+    : "No local extraction yet. Raw copied text is never persisted.";
   $("#studioEventLog").textContent = state.studioEventLog?.length
     ? state.studioEventLog.map(formatDiagnostic).join("\n\n")
     : "No persistent Studio events yet.";

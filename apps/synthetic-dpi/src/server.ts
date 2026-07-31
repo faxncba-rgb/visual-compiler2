@@ -7,6 +7,10 @@ import {
   renderCrossOriginFrame,
   renderDataflowDestination,
   renderDataflowSource,
+  renderDhoBatchEntry,
+  renderDhoBatchList,
+  renderDhoBatchSource,
+  renderDhoBatchValidation,
   renderDialogWorkflow,
   renderEditorFrame,
   renderFixture,
@@ -58,6 +62,14 @@ export function createSyntheticDpiServer() {
       return html(response, renderDataflowSource());
     if (url.pathname === "/fixture/dataflow-destination")
       return html(response, renderDataflowDestination());
+    if (url.pathname === "/fixture/dho-batch/list")
+      return html(response, renderDhoBatchList());
+    if (url.pathname === "/fixture/dho-batch/entry")
+      return html(response, renderDhoBatchEntry());
+    if (url.pathname === "/fixture/dho-batch/source")
+      return html(response, renderDhoBatchSource());
+    if (url.pathname === "/fixture/dho-batch/validation")
+      return html(response, renderDhoBatchValidation());
     if (url.pathname === "/fixture/dialogs")
       return html(response, renderDialogWorkflow());
     if (url.pathname === "/fixture/controls")

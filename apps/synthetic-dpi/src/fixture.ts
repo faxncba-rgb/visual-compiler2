@@ -322,6 +322,104 @@ export function renderDataflowDestination() {
   </section></main></body></html>`;
 }
 
+export function renderDhoBatchList() {
+  const rows = Array.from({ length: 20 }, (_, index) => {
+    const record = index + 1;
+    return `<tr data-vc-record="${record}">
+      <td>Dossier synthétique ${String(record).padStart(2, "0")}</td>
+      <td><a href="/fixture/dho-batch/entry" data-vc-action="code-record"
+        onclick="sessionStorage.setItem('vc2-dho-current', '${record}')">Coder ce dossier</a></td>
+    </tr>`;
+  }).join("");
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Lot DHO synthétique</title>
+  <style>${baseStyles}table{width:100%;border-collapse:collapse}th,td{padding:9px;border:1px solid #ccd4ce;text-align:left}</style>
+  </head><body><div class="lab">LAB MODE — SYNTHETIC DHO BATCH ONLY</div>
+  <main><section aria-labelledby="batch-heading"><h1 id="batch-heading">Dossiers DHO synthétiques</h1>
+  <table><thead><tr><th>Dossier</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>
+  <p data-vc-result-count></p></section></main>
+  <script>
+    const results = JSON.parse(sessionStorage.getItem('vc2-dho-results') || '[]');
+    document.querySelector('[data-vc-result-count]').textContent =
+      results.length + ' dossier(s) traité(s).';
+  </script></body></html>`;
+}
+
+export function renderDhoBatchEntry() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Saisie DHO synthétique</title>
+  <style>${baseStyles}.inline{display:grid;grid-template-columns:1fr 1fr;gap:14px}.managed{margin-left:28px}</style>
+  </head><body><div class="lab">LAB MODE — SYNTHETIC DHO ENTRY ONLY</div>
+  <main><section aria-labelledby="entry-heading"><h1 id="entry-heading">Codage DHO synthétique</h1>
+  <button type="button" data-vc-action="open-payment-source">Ouvrir le texte source</button>
+  <div class="inline">
+    <label>Première case DHO <input name="dho_1" inputmode="decimal"></label>
+    <div>
+      <label>Entente Directe <input type="checkbox" name="entente_directe_tout"></label>
+      <label class="managed">Case interne gérée par le site <input type="checkbox" name="entente_directe_pending" onclick="return true"></label>
+    </div>
+  </div>
+  <a class="save" href="#" data-vc-action="open-final-validation">Ouvrir la validation finale</a>
+  </section></main>
+  <script>
+    const current = Number(sessionStorage.getItem('vc2-dho-current') || '1');
+    const master = document.querySelector('[name="entente_directe_tout"]');
+    const managed = document.querySelector('[name="entente_directe_pending"]');
+    managed.name = 'entente_directe_' + current;
+    master.addEventListener('click', () => {
+      if (managed.checked !== master.checked) managed.click();
+    });
+    document.querySelector('[data-vc-action="open-payment-source"]').addEventListener('click', () => {
+      window.open('/fixture/dho-batch/source', 'vc2-dho-source', 'width=620,height=360');
+    });
+    document.querySelector('[data-vc-action="open-final-validation"]').addEventListener('click', event => {
+      event.preventDefault();
+      window.open('/fixture/dho-batch/validation', 'vc2-dho-validation', 'width=520,height=340');
+    });
+    window.__vc2DhoValidated = function() {
+      const results = JSON.parse(sessionStorage.getItem('vc2-dho-results') || '[]');
+      results.push({
+        record: current,
+        amount: document.querySelector('[name="dho_1"]').value,
+        directAgreement: master.checked
+      });
+      sessionStorage.setItem('vc2-dho-results', JSON.stringify(results));
+      location.assign('/fixture/dho-batch/list');
+    };
+  </script></body></html>`;
+}
+
+export function renderDhoBatchSource() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Texte source DHO synthétique</title>
+  <style>${baseStyles}</style></head><body><div class="lab">LAB MODE — SYNTHETIC SOURCE ONLY</div>
+  <main><section aria-labelledby="source-dho-heading"><h1 id="source-dho-heading">Justificatif synthétique</h1>
+  <p>Sélectionnez la zone démontrée.</p>
+  <span data-vc-field="dho-copy-zone"></span>
+  </section></main>
+  <script>
+    const current = Number(sessionStorage.getItem('vc2-dho-current') || '1');
+    const amount = 100 + current;
+    const method = current % 2 === 1 ? 'VIR confirmé' : 'Règlement standard';
+    document.querySelector('[data-vc-field="dho-copy-zone"]').textContent =
+      'Référence exclue 53,90. ' + method + '. Montant ' + amount + '.';
+    document.addEventListener('copy', () => setTimeout(() => window.close(), 80));
+  </script></body></html>`;
+}
+
+export function renderDhoBatchValidation() {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Validation DHO synthétique</title>
+  <style>${baseStyles}</style></head><body><div class="lab">LAB MODE — SYNTHETIC VALIDATION ONLY</div>
+  <main><form name="modif"><section aria-labelledby="validation-dho-heading">
+  <h1 id="validation-dho-heading">Validation finale synthétique</h1>
+  <label>Contrôle final <input type="checkbox" name="controle_final"></label>
+  <button type="submit" name="validate_dho">Valider et fermer</button>
+  </section></form></main>
+  <script>
+    document.querySelector('form[name="modif"]').addEventListener('submit', event => {
+      event.preventDefault();
+      if (window.opener && !window.opener.closed) window.opener.__vc2DhoValidated();
+      setTimeout(() => window.close(), 80);
+    });
+  </script></body></html>`;
+}
 export function renderPopupWorkflow() {
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Workflow popup synthétique</title>
   <style>${baseStyles}</style></head><body>

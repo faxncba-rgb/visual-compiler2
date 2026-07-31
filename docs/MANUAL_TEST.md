@@ -75,6 +75,41 @@ does not contact the real DPI.
 5. Run locally and then **Run again**. Confirm `PASSED` twice and both runtime
    AI counters remain zero.
 
+## DHO copied-text batch retest
+
+Use authorized test patients only. Do not start teaching until authentication
+and navigation to the first codage row are complete.
+
+1. Select **Start teaching** and demonstrate one complete patient:
+   open the codage row, open the source popup, select the intended text zone,
+   copy it, fill the first **DHO** field, demonstrate the first **Entente
+   Directe** checkbox when applicable, complete the validation popup and return
+   to the list. Then select **Stop teaching**.
+2. Keep the human master checkbox action in the timeline. A second checkbox
+   toggled synchronously by the site is a recorded reaction, not another
+   executable user action.
+3. In the optional GPT-5.6 instruction enter exactly:
+
+   ```text
+   Rechercher le premier chiffre entre 50 et 5000, exclure 53,90. Si le mot-clé VIR est détecté, cocher la première case Entente Directe. Répéter 20 fois.
+   ```
+
+4. Compile once. Confirm the artifact contains one memory-only extraction, a
+   `number-in-range` transform, a `VIR` execution guard and a bounded 20-item
+   workflow loop. The compile-time model call count must be `1`.
+5. Select **Run locally**. Confirm every iteration reselects the same
+   structurally captured popup zone, ignores `53,90`, fills the first DHO field
+   with the first other value from 50 through 5000, and checks the first
+   **Entente Directe** only when `VIR` is a complete token.
+6. Confirm exactly 20 completed iterations, duplicate-item protection remains
+   enabled, Runtime LLM calls is `0` and Runtime OpenAI requests is `0`.
+7. Open **Advanced details → Redacted copied-text audit**. Confirm there is one
+   entry per iteration with structural replay, counts and keyword-match flags.
+   Raw copied text and the derived amount must never be shown or persisted.
+8. Select **Run again** only after returning to a fresh authorized 20-patient
+   test list. Confirm another deterministic 20-item pass with both runtime AI
+   counters still at zero.
+
 ## Deliberate boundaries
 
 - Use only authorized synthetic data; automated tests never contact the real

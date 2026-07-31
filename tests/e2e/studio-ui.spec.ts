@@ -92,6 +92,18 @@ test("Studio panel text is mouse-selectable and copyable with the standard short
   await expect
     .poll(() => page.evaluate(() => navigator.clipboard.readText()))
     .toContain("No demonstration recorded");
+
+  await page.getByText("Redacted copied-text audit", { exact: true }).click();
+  const extractionAudit = page.locator("#extractionAudit");
+  await expect(extractionAudit).toBeVisible();
+  expect(
+    await extractionAudit.evaluate(
+      (element) => getComputedStyle(element).userSelect,
+    ),
+  ).toBe("text");
+  await expect(extractionAudit).toContainText(
+    "Raw copied text is never persisted",
+  );
 });
 
 test("production configuration defaults to the DPI home without contacting it", () => {
