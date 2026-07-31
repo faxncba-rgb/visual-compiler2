@@ -6,9 +6,11 @@ import {
   OpenAiCompileProvider,
   buildAiPayload,
   compileDemonstration,
+  deriveDeterministicRuntimePolicy,
   validateAndNormalizeSemanticIr,
 } from "../../packages/generalization-compiler/src";
 import { session } from "../helpers/factories";
+import { target } from "../helpers/factories";
 
 describe("strict AI generalization boundary", () => {
   it("builds a query-free, value-free payload preview", () => {
@@ -213,5 +215,91 @@ describe("strict AI generalization boundary", () => {
       text: { format: { type: "json_schema", strict: true } },
     });
     expect(String(request?.init?.body)).not.toContain("test-only-key");
+  });
+
+  it("derives immutable local dataflow, VIR guard and a 20-run bound from explicit instructions", () => {
+    const demo = session();
+    demo.actions = [
+      {
+        id: "extract-source",
+        pageContextId: "page-main",
+        action: "extract",
+        name: "copied source zone",
+        target: target({
+          fingerprint: "source-zone",
+          tag: "span",
+          role: undefined,
+          editable: false,
+        }),
+        outputVariable: "copied_text_1",
+        observedEffects: [],
+        timestampOffsetMs: 100,
+        optional: false,
+      },
+      {
+        id: "fill-dho",
+        pageContextId: "page-main",
+        action: "fill",
+        name: "filled first DHO",
+        target: target({
+          fingerprint: "dho",
+          stableAttributes: { name: "dho_1" },
+        }),
+        value: {
+          kind: "literal",
+          value: "200",
+          persistence: "workflow",
+        },
+        observedEffects: [],
+        timestampOffsetMs: 200,
+        optional: false,
+      },
+      {
+        id: "check-entente",
+        pageContextId: "page-main",
+        action: "check",
+        name: "checked first Entente Directe",
+        target: target({
+          fingerprint: "entente",
+          inputType: "checkbox",
+          role: "checkbox",
+          stableAttributes: { name: "entente_directe_tout" },
+        }),
+        observedEffects: [],
+        timestampOffsetMs: 300,
+        optional: false,
+      },
+    ];
+    demo.variables = [
+      {
+        id: "runtime-copy",
+        name: "copied_text_1",
+        valueType: "string",
+        sourceActionId: "extract-source",
+        privacy: "runtime-derived",
+        required: true,
+      },
+    ];
+    const policy = deriveDeterministicRuntimePolicy(
+      demo,
+      "Rechercher le premier chiffre entre 50 et 5000, exclure 53,90. Si le mot-clé VIR est détecté, cocher la première case Entente Directe. Répéter 20 fois.",
+    );
+    expect(policy.repeatCount).toBe(20);
+    expect(policy.valueBindings.get("fill-dho")).toEqual({
+      variableName: "copied_text_1",
+      transforms: [
+        {
+          type: "number-in-range",
+          minimum: 50,
+          maximum: 5000,
+          excludedNumbers: [53.9],
+          occurrence: "first",
+        },
+      ],
+    });
+    expect(policy.executionGuards.get("check-entente")).toMatchObject({
+      variableName: "copied_text_1",
+      keyword: "VIR",
+    });
   });
 });

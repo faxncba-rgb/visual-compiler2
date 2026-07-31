@@ -109,7 +109,9 @@ export function generateLocatorCandidates(
           strategy: "role-name",
           role: target.role,
           name: target.accessibleName,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `getByRole(${JSON.stringify(target.role)}, { name: ${JSON.stringify(target.accessibleName)}, exact: true })`,
         0.98,
@@ -127,7 +129,9 @@ export function generateLocatorCandidates(
           strategy: "text-dom-relation",
           tagName: target.descriptor.tag,
           staticText: target.descriptor.normalizedStaticText,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `${target.descriptor.tag}:text-is(${JSON.stringify(target.descriptor.normalizedStaticText)})`,
         0.96,
@@ -144,7 +148,9 @@ export function generateLocatorCandidates(
         {
           strategy: "label-association",
           label: target.associatedLabel,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `getByLabel(${JSON.stringify(target.associatedLabel)}, { exact: true })`,
         0.97,
@@ -162,7 +168,9 @@ export function generateLocatorCandidates(
         {
           strategy: "form-control-name",
           formControlName,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `[name="${escapeForAttribute(formControlName)}"]`,
         0.91,
@@ -185,7 +193,9 @@ export function generateLocatorCandidates(
           role: target.role,
           name: target.accessibleName,
           containerHeading: target.semanticContainer.heading,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `container(${JSON.stringify(target.semanticContainer.heading)}).getByRole(${JSON.stringify(target.role)}, { name: ${JSON.stringify(target.accessibleName)} })`,
         0.95,
@@ -207,7 +217,9 @@ export function generateLocatorCandidates(
           ...(sequenceContext?.previousActionId
             ? { sequencePreviousActionId: sequenceContext.previousActionId }
             : {}),
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `form[name=${JSON.stringify(target.descriptor.formName)}] ${target.descriptor.controlFamily}`,
         sequenceContext?.sameForm ? 0.97 : 0.88,
@@ -334,13 +346,7 @@ export function generateLocatorCandidates(
       ),
     );
   }
-  if (
-    click?.table &&
-    stableRowText &&
-    !click.icon &&
-    click.canonicalHref &&
-    target.descriptor?.rawTargetPromoted
-  ) {
+  if (click?.table && stableRowText && !click.icon && click.canonicalHref) {
     candidates.push(
       baseCandidate(
         target,
@@ -398,7 +404,9 @@ export function generateLocatorCandidates(
           strategy: "stable-attribute",
           attribute,
           attributeValue,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         `[${attribute}="${escapeForAttribute(attributeValue)}"]`,
         0.89,
@@ -439,7 +447,9 @@ export function generateLocatorCandidates(
           strategy: "structural-fallback",
           containerHeading: target.semanticContainer.heading,
           structuralPath: target.structuralPath,
-          ...(target.frame.title ? { frameTitle: target.frame.title } : {}),
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
         },
         target.structuralPath,
         0.61,

@@ -18,6 +18,7 @@ export function createRuntimeTelemetry(
     openAIRequests: 0,
     steps: [],
     outcomeChecks: [],
+    extractionAudit: [],
     redactedLog: [],
   });
 }

@@ -9,6 +9,8 @@ import {
   type CompiledWorkflow,
   type DemonstrationSession,
   type LocatorCandidate,
+  type RuntimeValueTransform,
+  type StepExecutionGuard,
 } from "../../demonstration-ir/src";
 import type { PageContextGraph } from "../../page-context-graph/src";
 import {
@@ -23,7 +25,7 @@ import {
 } from "../../workflow-variables/src";
 import { createId, sha256 } from "../../shared/src";
 
-export const PROMPT_VERSION = "semantic-enrichment-gpt-5.6-v4";
+export const PROMPT_VERSION = "semantic-enrichment-gpt-5.6-v5";
 export const COMPILE_MODEL = "gpt-5.6";
 
 export type CompilationStage =
@@ -659,7 +661,7 @@ export function validateAndNormalizeSemanticIr(
   };
 }
 
-function redactStructuralText(value: string | undefined) {
+function redactStructuralText(value: string | undefined, limit = 160) {
   if (!value) return undefined;
   return value
     .replaceAll(/https?:\/\/[^\s]+/gi, (match) => {
@@ -678,7 +680,7 @@ function redactStructuralText(value: string | undefined) {
       /\b(?:patient|dossier|record)\s*[:#-]?\s*[a-z0-9_-]+/gi,
       "[REDACTED_IDENTIFIER]",
     )
-    .slice(0, 160);
+    .slice(0, limit);
 }
 
 export function buildAiPayload(
@@ -690,7 +692,7 @@ export function buildAiPayload(
   assertNoLocalValuesInSession(session, values);
   return {
     promptVersion: PROMPT_VERSION,
-    instruction: redactStructuralText(instruction) ?? "",
+    instruction: redactStructuralText(instruction, 2_000) ?? "",
     demonstration: {
       id: session.id,
       pages: session.pages.map((page) => ({
@@ -1115,11 +1117,235 @@ function inputStrategiesFor(action: DemonstrationSession["actions"][number]) {
   }
 }
 
+type DeterministicRuntimePolicy = {
+  valueBindings: Map<
+    string,
+    {
+      variableName: string;
+      transforms: RuntimeValueTransform[];
+    }
+  >;
+  executionGuards: Map<string, StepExecutionGuard>;
+  repeatCount?: number;
+};
+
+function instructionNumber(value: string) {
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function deriveDeterministicRuntimePolicy(
+  session: DemonstrationSession,
+  instruction: string,
+): DeterministicRuntimePolicy {
+  const valueBindings: DeterministicRuntimePolicy["valueBindings"] = new Map();
+  const executionGuards: DeterministicRuntimePolicy["executionGuards"] =
+    new Map();
+  const range =
+    /(?:between|entre)\s+(\d+(?:[.,]\d+)?)\s+(?:and|et)\s+(\d+(?:[.,]\d+)?)/i.exec(
+      instruction,
+    );
+  const minimum = range?.[1] ? instructionNumber(range[1]) : undefined;
+  const maximum = range?.[2] ? instructionNumber(range[2]) : undefined;
+  const excludedNumbers = [
+    ...instruction.matchAll(
+      /(?:exclude|excluding|exclure|ignorer)\s+(?:le\s+|la\s+|the\s+)?(?:nombre\s+|chiffre\s+|number\s+)?["“']?(\d+(?:[.,]\d+)?)/gi,
+    ),
+  ].flatMap((match) => {
+    const value = match[1] ? instructionNumber(match[1]) : undefined;
+    return value === undefined ? [] : [value];
+  });
+  const extractIndex = session.actions.findIndex(
+    (action) => action.action === "extract" && Boolean(action.outputVariable),
+  );
+  const extract = session.actions[extractIndex];
+  const fill = session.actions
+    .slice(Math.max(0, extractIndex + 1))
+    .find((action) => ["fill", "select"].includes(action.action));
+  if (
+    extract?.outputVariable &&
+    fill &&
+    minimum !== undefined &&
+    maximum !== undefined &&
+    minimum <= maximum
+  )
+    valueBindings.set(fill.id, {
+      variableName: extract.outputVariable,
+      transforms: [
+        {
+          type: "number-in-range",
+          minimum,
+          maximum,
+          excludedNumbers,
+          occurrence: "first",
+        },
+      ],
+    });
+
+  const keywordCondition =
+    /\b(?:if|si)\b[\s\S]{0,160}\bVIR\b/i.test(instruction) &&
+    /\b(?:check|cocher)\b/i.test(instruction);
+  if (extract?.outputVariable && fill && keywordCondition) {
+    const fillIndex = session.actions.findIndex(
+      (action) => action.id === fill.id,
+    );
+    const guardedToggle = session.actions
+      .slice(fillIndex + 1)
+      .find((action) => action.action === "check");
+    if (guardedToggle)
+      executionGuards.set(guardedToggle.id, {
+        type: "runtime-variable-contains",
+        variableName: extract.outputVariable,
+        keyword: "VIR",
+        caseSensitive: false,
+        wholeWord: true,
+      });
+  }
+
+  const repeat =
+    /(?:repeat|rép[eé]ter|r[eé]p[eé]t[eé]e?)?[\s\S]{0,48}?(\d{1,3})\s*(?:times|fois)\b/i.exec(
+      instruction,
+    );
+  const repeatCount = repeat?.[1] ? Number(repeat[1]) : undefined;
+  return {
+    valueBindings,
+    executionGuards,
+    ...(repeatCount && repeatCount >= 1 && repeatCount <= 1000
+      ? { repeatCount }
+      : {}),
+  };
+}
+
+function sameToggleFamily(
+  left: DemonstrationSession["actions"][number] | undefined,
+  right: DemonstrationSession["actions"][number],
+) {
+  if (
+    !left ||
+    !["check", "uncheck"].includes(left.action) ||
+    right.action !== left.action ||
+    right.pageContextId !== left.pageContextId ||
+    right.timestampOffsetMs - left.timestampOffsetMs < 0 ||
+    right.timestampOffsetMs - left.timestampOffsetMs > 80
+  )
+    return false;
+  const normalize = (value: string | undefined) =>
+    value?.toLocaleLowerCase().replace(/_(?:tout|all|\d+|[a-f0-9-]{8,})$/i, "");
+  const leftFamily = normalize(left.target?.stableAttributes.name);
+  const rightFamily = normalize(right.target?.stableAttributes.name);
+  return Boolean(
+    leftFamily &&
+      leftFamily.length >= 4 &&
+      leftFamily === rightFamily &&
+      left.target?.fingerprint !== right.target?.fingerprint &&
+      (left.target?.descriptor?.hasOnclick ||
+        right.target?.descriptor?.hasOnclick),
+  );
+}
+
+function isForensicOnlyAction(
+  actions: DemonstrationSession["actions"],
+  index: number,
+) {
+  const action = actions[index]!;
+  if (sameToggleFamily(actions[index - 1], action)) return true;
+  if (action.action !== "keyboard" || !action.key) return false;
+  const followingExtract = actions
+    .slice(index + 1)
+    .find(
+      (candidate) =>
+        candidate.action === "extract" &&
+        candidate.pageContextId === action.pageContextId &&
+        candidate.timestampOffsetMs - action.timestampOffsetMs <= 500,
+    );
+  if (
+    ["Meta+Meta", "Meta+c", "Control+Control", "Control+c"].includes(
+      action.key,
+    ) &&
+    followingExtract
+  )
+    return true;
+  if (!action.target) return false;
+  const terminalKey = action.key.split("+").at(-1) ?? action.key;
+  const representsTextInput =
+    [...terminalKey].length === 1 ||
+    ["Shift", "Meta", "Control", "Alt", "AltGraph"].includes(terminalKey);
+  if (!representsTextInput) return false;
+  return actions.some(
+    (candidate) =>
+      candidate.action === "fill" &&
+      Boolean(candidate.editingTransaction) &&
+      candidate.pageContextId === action.pageContextId &&
+      candidate.target?.fingerprint === action.target?.fingerprint &&
+      Math.abs(candidate.timestampOffsetMs - action.timestampOffsetMs) <= 1_500,
+  );
+}
+
+function applyExplicitLoopPolicy(
+  output: AiGeneralizationOutput,
+  session: DemonstrationSession,
+  policy: DeterministicRuntimePolicy,
+) {
+  if (!policy.repeatCount) return output;
+  const templateActionIds = session.actions
+    .filter(
+      (action, index) =>
+        !isForensicOnlyAction(session.actions, index) &&
+        [
+          "click",
+          "double-click",
+          "fill",
+          "select",
+          "check",
+          "uncheck",
+          "keyboard",
+          "submit",
+          "extract",
+        ].includes(action.action),
+    )
+    .map((action) => action.id);
+  const firstClick = session.actions.find(
+    (action) => action.action === "click",
+  );
+  const baseLoop = output.loops[0];
+  return {
+    ...output,
+    loops: [
+      {
+        collectionDescription:
+          baseLoop?.collectionDescription ?? "Following eligible records",
+        templateActionIds: baseLoop?.templateActionIds.length
+          ? baseLoop.templateActionIds
+          : templateActionIds,
+        templateRowFingerprint:
+          baseLoop?.templateRowFingerprint ??
+          sha256(
+            firstClick?.target?.structuralPath ??
+              firstClick?.target?.fingerprint ??
+              session.id,
+          ),
+        nextItemRelationship: "next-row" as const,
+        eligibilityPredicate:
+          baseLoop?.eligibilityPredicate ??
+          "next demonstrated row is visible and enabled",
+        maximumIterations: policy.repeatCount,
+        maximumDurationMs:
+          baseLoop?.maximumDurationMs ??
+          Math.max(60_000, policy.repeatCount * 30_000),
+        duplicateItemProtection: true as const,
+        errorPolicy:
+          baseLoop?.errorPolicy ?? ("stop-first-required-failure" as const),
+      },
+    ],
+  };
+}
+
 async function compileSteps(
   session: DemonstrationSession,
   graph: PageContextGraph,
   values: LocalVariableValues,
   aiOutput: AiGeneralizationOutput,
+  runtimePolicy: DeterministicRuntimePolicy,
 ) {
   const steps: CompiledStep[] = [];
   for (
@@ -1128,6 +1354,7 @@ async function compileSteps(
     actionIndex += 1
   ) {
     const action = session.actions[actionIndex]!;
+    if (isForensicOnlyAction(session.actions, actionIndex)) continue;
     const stepId = createId("step");
     const hasExecutableTarget = Boolean(action.target);
     let candidates: Awaited<ReturnType<typeof validateLocatorCandidates>> = [];
@@ -1190,6 +1417,8 @@ async function compileSteps(
       variable?.privacy === "local-literal" && variable.name in values
         ? String(values[variable.name])
         : undefined;
+    const valueBinding = runtimePolicy.valueBindings.get(action.id);
+    const executionGuard = runtimePolicy.executionGuards.get(action.id);
     const preconditions = hasExecutableTarget
       ? [
           {
@@ -1257,6 +1486,21 @@ async function compileSteps(
       ...(action.outputVariable
         ? { outputVariable: action.outputVariable }
         : {}),
+      ...(action.extractionSelection
+        ? { extractionSelection: action.extractionSelection }
+        : {}),
+      ...(valueBinding
+        ? {
+            value: {
+              kind: "runtime-variable" as const,
+              name: valueBinding.variableName,
+              persistence: "memory-only" as const,
+            },
+            valueTransforms: valueBinding.transforms,
+          }
+        : {}),
+      valueTransforms: valueBinding?.transforms ?? [],
+      ...(executionGuard ? { executionGuard } : {}),
       ...(action.valueRef && !localLiteral
         ? { valueRef: action.valueRef }
         : {}),
@@ -1365,6 +1609,7 @@ function mergeInferredActions(
       optional: inferred.confidence < 0.85,
       preconditions: [],
       postconditions: [],
+      valueTransforms: [],
       semanticEnrichment: {
         intention: inferred.justification,
         semanticTarget: `${pageContext.origin}${pageContext.pathname}`,
@@ -1417,6 +1662,7 @@ function compileLoops(
       maximumDurationMs: loop.maximumDurationMs,
       duplicateItemProtection: loop.duplicateItemProtection,
       errorPolicy: loop.errorPolicy,
+      executionScope: "workflow",
     };
   });
 }
@@ -1553,20 +1799,46 @@ function generatedExactTextPattern(value: string) {
 }
 
 function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
+  const hasNumberTransform = steps.some((step) =>
+    step.valueTransforms.some(
+      (transform) => transform.type === "number-in-range",
+    ),
+  );
+  const hasRuntimeGuard = steps.some((step) => step.executionGuard);
   const lines = [
     `// Generated deterministic outline for ${workflowId}.`,
     "// Runtime values are resolved locally; no OpenAI dependency is used.",
     "export async function run(page, variables) {",
+    ...(hasNumberTransform
+      ? [
+          "  const firstNumberInRange = (text, minimum, maximum, excluded) => {",
+          "    const tokens = String(text).match(/(?:\\d{1,3}(?:[ \\u00a0\\u202f]\\d{3})+|\\d+)(?:[.,]\\d+)?/g) ?? [];",
+          "    const match = tokens.find(token => { const value = Number(token.replace(/[ \\u00a0\\u202f]/g, '').replace(',', '.')); return value >= minimum && value <= maximum && !excluded.includes(value); });",
+          "    if (!match) throw new Error('No eligible numeric value.');",
+          "    return match.replace(/[ \\u00a0\\u202f]/g, '');",
+          "  };",
+        ]
+      : []),
+    ...(hasRuntimeGuard
+      ? [
+          "  const containsWholeWord = (text, keyword) => new RegExp(`(?:^|[^\\\\p{L}\\\\p{N}_])${keyword}(?:$|[^\\\\p{L}\\\\p{N}_])`, 'iu').test(String(text));",
+        ]
+      : []),
   ];
   for (const step of steps) {
     const selected = step.locatorCandidates.find(
       (candidate) => candidate.id === step.selectedLocatorId,
     );
     if (step.action === "fill" && selected) {
-      const generatedValue =
+      let generatedValue =
         step.value?.kind === "literal"
           ? JSON.stringify(step.value.value)
           : `variables.${step.value?.kind === "runtime-variable" ? step.value.name : (step.valueRef?.slice(2, -2) ?? "value")}`;
+      const numberTransform = step.valueTransforms.find(
+        (transform) => transform.type === "number-in-range",
+      );
+      if (numberTransform)
+        generatedValue = `firstNumberInRange(${generatedValue}, ${numberTransform.minimum}, ${numberTransform.maximum}, ${JSON.stringify(numberTransform.excludedNumbers)})`;
       lines.push(
         `  await ${generatedLocator(selected)}.fill(${generatedValue});`,
       );
@@ -1585,7 +1857,10 @@ function generatePlaywright(workflowId: string, steps: CompiledStep[]) {
         `  await ${generatedLocator(selected)}.selectOption(${generatedValue});`,
       );
     } else if (step.action === "check" && selected) {
-      lines.push(`  await ${generatedLocator(selected)}.check();`);
+      const prefix = step.executionGuard
+        ? `if (containsWholeWord(variables.${step.executionGuard.variableName}, ${JSON.stringify(step.executionGuard.keyword)})) `
+        : "";
+      lines.push(`${prefix}  await ${generatedLocator(selected)}.check();`);
     } else if (step.action === "uncheck" && selected) {
       lines.push(`  await ${generatedLocator(selected)}.uncheck();`);
     } else if (step.action === "keyboard" && selected) {
@@ -1650,6 +1925,7 @@ export async function compileDemonstration({
     throw compilationStageError("demonstration-validation", error);
   }
   const instruction = generalizationInstruction.trim();
+  const runtimePolicy = deriveDeterministicRuntimePolicy(session, instruction);
   let aiPayload: AiPayload;
   let aiOutput: AiGeneralizationOutput;
   let semanticIrDiagnostics: SemanticIrNormalizationDiagnostic[] = [];
@@ -1663,7 +1939,11 @@ export async function compileDemonstration({
       await provider.generalize(aiPayload),
       session,
     );
-    aiOutput = normalized.output;
+    aiOutput = applyExplicitLoopPolicy(
+      normalized.output,
+      session,
+      runtimePolicy,
+    );
     semanticIrDiagnostics = normalized.diagnostics;
   } catch (error) {
     throw compilationStageError("generalization", error);
@@ -1672,7 +1952,7 @@ export async function compileDemonstration({
   try {
     steps = mergeInferredActions(
       aiOutput,
-      await compileSteps(session, graph, localValues, aiOutput),
+      await compileSteps(session, graph, localValues, aiOutput, runtimePolicy),
       session,
     );
   } catch (error) {
@@ -1727,6 +2007,35 @@ export async function compileDemonstration({
                 ? "Validated Semantic IR was produced once by GPT-5.6 at compile time."
                 : "Validated Semantic IR was produced once by the automated GPT-5.6 test mock.",
           },
+          ...(runtimePolicy.valueBindings.size > 0
+            ? [
+                {
+                  level: "info" as const,
+                  code: "DETERMINISTIC_RUNTIME_DATAFLOW",
+                  message:
+                    "Explicit compile instruction produced validated local extraction transforms; copied text remains memory-only.",
+                },
+              ]
+            : []),
+          ...(runtimePolicy.executionGuards.size > 0
+            ? [
+                {
+                  level: "info" as const,
+                  code: "DETERMINISTIC_RUNTIME_CONDITION",
+                  message:
+                    "Explicit compile instruction produced a validated local keyword guard.",
+                },
+              ]
+            : []),
+          ...(runtimePolicy.repeatCount
+            ? [
+                {
+                  level: "info" as const,
+                  code: "EXPLICIT_BOUNDED_REPEAT",
+                  message: `The workflow is bounded to ${runtimePolicy.repeatCount} local iteration(s) with duplicate protection.`,
+                },
+              ]
+            : []),
           ...semanticIrDiagnostics,
         ],
         generatedPlaywright: generatePlaywright(workflowId, steps),

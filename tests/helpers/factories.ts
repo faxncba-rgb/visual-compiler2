@@ -190,6 +190,7 @@ export function loop(overrides: Partial<CompiledLoop> = {}): CompiledLoop {
     maximumDurationMs: 600_000,
     duplicateItemProtection: true,
     errorPolicy: "stop-first-required-failure",
+    executionScope: "workflow",
     ...overrides,
   };
 }

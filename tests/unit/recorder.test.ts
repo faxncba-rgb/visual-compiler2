@@ -4,6 +4,7 @@ import {
   actionableAncestorIndex,
   deduplicateAction,
   deriveOutcomeCandidates,
+  isCascadedToggleReaction,
   shouldExcludeFrame,
   variableNameForTarget,
 } from "../../packages/demonstration-recorder/src";
@@ -94,6 +95,47 @@ describe("high-level recorder", () => {
       }),
     );
     expect(actions.map((entry) => entry.key)).toEqual(["c", "Enter"]);
+  });
+
+  it("classifies a site-managed Entente Directe cascade as a reaction", () => {
+    const master = action({
+      id: "master-check",
+      action: "check",
+      timestampOffsetMs: 100,
+      target: target({
+        fingerprint: "master",
+        inputType: "checkbox",
+        role: "checkbox",
+        stableAttributes: { name: "entente_directe_tout" },
+      }),
+    });
+    const managed = action({
+      id: "managed-check",
+      action: "check",
+      timestampOffsetMs: 105,
+      target: target({
+        fingerprint: "managed",
+        inputType: "checkbox",
+        role: "button",
+        stableAttributes: { name: "entente_directe_1503004" },
+        descriptor: {
+          ...target().descriptor!,
+          controlFamily: "toggle",
+          actionCompatibility: ["check"],
+          hasOnclick: true,
+        },
+      }),
+    });
+    expect(isCascadedToggleReaction(master, managed)).toBe(true);
+    expect(
+      isCascadedToggleReaction(
+        master,
+        action({
+          ...managed,
+          timestampOffsetMs: 400,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("drops the duplicate change event emitted after a filled editor loses focus", () => {

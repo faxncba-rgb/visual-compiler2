@@ -296,6 +296,37 @@ export const WorkflowActionValueSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const ExtractionSelectionSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("element"),
+  }),
+  z.object({
+    mode: z.literal("text-range"),
+    startPath: z.array(z.number().int().nonnegative()).max(24),
+    startOffset: z.number().int().nonnegative(),
+    endPath: z.array(z.number().int().nonnegative()).max(24),
+    endOffset: z.number().int().nonnegative(),
+  }),
+]);
+
+export const RuntimeValueTransformSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("number-in-range"),
+    minimum: z.number().finite(),
+    maximum: z.number().finite(),
+    excludedNumbers: z.array(z.number().finite()).max(32).default([]),
+    occurrence: z.literal("first").default("first"),
+  }),
+]);
+
+export const StepExecutionGuardSchema = z.object({
+  type: z.literal("runtime-variable-contains"),
+  variableName: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  keyword: z.string().min(1).max(80),
+  caseSensitive: z.boolean().default(false),
+  wholeWord: z.boolean().default(true),
+});
+
 export const RecordedActionSchema = z.object({
   id: z.string(),
   sequence: z.number().int().positive().optional(),
@@ -310,6 +341,7 @@ export const RecordedActionSchema = z.object({
     .string()
     .regex(/^[a-z][a-z0-9_]*$/)
     .optional(),
+  extractionSelection: ExtractionSelectionSchema.optional(),
   valueRef: z.string().optional(),
   editingTransaction: z
     .object({
@@ -566,8 +598,11 @@ export const CompiledStepSchema = z.object({
     .string()
     .regex(/^[a-z][a-z0-9_]*$/)
     .optional(),
+  extractionSelection: ExtractionSelectionSchema.optional(),
   valueRef: z.string().optional(),
   localLiteral: z.string().optional(),
+  valueTransforms: z.array(RuntimeValueTransformSchema).default([]),
+  executionGuard: StepExecutionGuardSchema.optional(),
   inputStrategies: z
     .array(
       z.enum([
@@ -636,6 +671,7 @@ export const CompiledLoopSchema = z.object({
   maximumDurationMs: z.number().int().min(1000).max(3_600_000).default(600_000),
   duplicateItemProtection: z.boolean().default(true),
   errorPolicy: z.enum(["stop-first-required-failure", "continue-optional"]),
+  executionScope: z.literal("workflow").default("workflow"),
 });
 
 export const OutcomeEvidenceSchema = z.object({
@@ -752,6 +788,38 @@ export const RuntimeTelemetrySchema = z.object({
       passed: z.boolean(),
     }),
   ),
+  extractionAudit: z
+    .array(
+      z.object({
+        stepId: z.string(),
+        pageContextId: z.string(),
+        variableName: z.string().regex(/^[a-z][a-z0-9_]*$/),
+        sourceFingerprint: z.string(),
+        characterCount: z.number().int().nonnegative(),
+        contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        structuralSelectionReplayed: z.boolean(),
+        numericCandidates: z.number().int().nonnegative().default(0),
+        excludedNumericCandidates: z.number().int().nonnegative().default(0),
+        eligibleNumberFound: z.boolean().default(false),
+        keywordChecks: z
+          .array(
+            z.object({
+              keyword: z.string(),
+              matched: z.boolean(),
+            }),
+          )
+          .default([]),
+        rawTextPersisted: z.literal(false),
+      }),
+    )
+    .default([]),
+  loop: z
+    .object({
+      requestedIterations: z.number().int().positive(),
+      completedIterations: z.number().int().nonnegative(),
+      duplicateProtectionTriggered: z.boolean(),
+    })
+    .optional(),
   redactedLog: z.array(z.string()),
   error: z.string().optional(),
 });
@@ -764,6 +832,9 @@ export type RecordedPageContext = z.infer<typeof RecordedPageContextSchema>;
 export type PageContextGraphData = z.infer<typeof PageContextGraphSchema>;
 export type ObservedEffect = z.infer<typeof ObservedEffectSchema>;
 export type RecordedAction = z.infer<typeof RecordedActionSchema>;
+export type ExtractionSelection = z.infer<typeof ExtractionSelectionSchema>;
+export type RuntimeValueTransform = z.infer<typeof RuntimeValueTransformSchema>;
+export type StepExecutionGuard = z.infer<typeof StepExecutionGuardSchema>;
 export type WorkflowVariable = z.infer<typeof WorkflowVariableSchema>;
 export type DemonstrationSession = z.infer<typeof DemonstrationSessionSchema>;
 export type ApplicationState = z.infer<typeof ApplicationStateSchema>;

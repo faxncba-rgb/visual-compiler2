@@ -10,6 +10,7 @@ import {
   type ApplicationState,
   type DemonstratedTarget,
   type DemonstrationSession,
+  type ExtractionSelection,
   type ObservedEffect,
   type RecordedAction,
   type WorkflowVariable,
@@ -90,6 +91,7 @@ export type CapturedBrowserEvent = {
   value?: string;
   valueSource?: "literal" | "runtime-variable";
   runtimeVariableName?: string;
+  extractionSelection?: ExtractionSelection;
   editingTransaction?: {
     id: string;
     startedAt: number;
@@ -903,11 +905,53 @@ const RECORDER_INIT_SCRIPT = `(() => {
       edit.valueSource = 'runtime-variable';
     }
   }, listenerOptions);
+  const selectionNodePath = (root, node) => {
+    const path = [];
+    let current = node;
+    while (current && current !== root) {
+      const parent = current.parentNode;
+      if (!parent) return undefined;
+      const index = Array.prototype.indexOf.call(parent.childNodes, current);
+      if (index < 0) return undefined;
+      path.unshift(index);
+      current = parent;
+    }
+    return current === root ? path : undefined;
+  };
+  const extractionSelection = root => {
+    const selection = globalThis.getSelection?.();
+    if (!selection || selection.rangeCount !== 1 || selection.isCollapsed)
+      return { mode: 'element' };
+    const range = selection.getRangeAt(0);
+    if (
+      !root.contains(range.startContainer) ||
+      !root.contains(range.endContainer)
+    )
+      return { mode: 'element' };
+    const startPath = selectionNodePath(root, range.startContainer);
+    const endPath = selectionNodePath(root, range.endContainer);
+    if (!startPath || !endPath) return { mode: 'element' };
+    return {
+      mode: 'text-range',
+      startPath,
+      startOffset: range.startOffset,
+      endPath,
+      endOffset: range.endOffset
+    };
+  };
   document.addEventListener('copy', event => {
     flushEdit('commit');
-    const info = target(event.target);
+    const root = event.target instanceof Element
+      ? event.target
+      : event.target?.parentElement;
+    const info = target(root);
     if (!info || info.password || info.forbiddenValue) return;
-    send({ kind: 'extract', target: info, occurredAt: Date.now() });
+    send({
+      kind: 'extract',
+      target: info,
+      extractionSelection: extractionSelection(root),
+      occurredAt: Date.now()
+    });
   }, listenerOptions);
   document.addEventListener('click', event => {
     flushEdit('commit');
@@ -1167,6 +1211,40 @@ export function deduplicateAction(
   return "added" as const;
 }
 
+function toggleControlFamily(action: RecordedAction) {
+  const name = action.target?.stableAttributes.name;
+  if (!name) return undefined;
+  return name
+    .toLocaleLowerCase()
+    .replace(/_(?:tout|all|\d+|[a-f0-9-]{8,})$/i, "");
+}
+
+export function isCascadedToggleReaction(
+  previous: RecordedAction | undefined,
+  candidate: RecordedAction,
+  windowMs = 80,
+) {
+  if (
+    !previous ||
+    !["check", "uncheck"].includes(previous.action) ||
+    candidate.action !== previous.action ||
+    candidate.pageContextId !== previous.pageContextId ||
+    candidate.timestampOffsetMs < previous.timestampOffsetMs ||
+    candidate.timestampOffsetMs - previous.timestampOffsetMs > windowMs
+  )
+    return false;
+  const previousFamily = toggleControlFamily(previous);
+  const candidateFamily = toggleControlFamily(candidate);
+  return Boolean(
+    previousFamily &&
+      previousFamily.length >= 4 &&
+      previousFamily === candidateFamily &&
+      previous.target?.fingerprint !== candidate.target?.fingerprint &&
+      (candidate.target?.descriptor?.hasOnclick ||
+        previous.target?.descriptor?.hasOnclick),
+  );
+}
+
 function pageLabel(role: string) {
   if (role === "popup") return "Validation popup";
   if (role === "frame") return "Editor frame";
@@ -1413,6 +1491,8 @@ export class DemonstrationRecorder {
           (right.captureSequence ?? right.sequence ?? 0),
     );
     this.#normalizeSelectionsBeforeFinalize();
+    this.#normalizeEditingKeyboardNoise();
+    this.#normalizeCascadedToggleReactions();
     this.#session.actions.forEach((action, index) => {
       action.sequence = index + 1;
     });
@@ -2101,6 +2181,9 @@ export class DemonstrationRecorder {
       ...(sequenceContext ? { sequenceContext } : {}),
       ...(workflowValue ? { value: workflowValue } : {}),
       ...(outputVariable ? { outputVariable } : {}),
+      ...(payload.extractionSelection
+        ? { extractionSelection: payload.extractionSelection }
+        : {}),
       ...(payload.editingTransaction
         ? {
             editingTransaction: {
@@ -2343,6 +2426,56 @@ export class DemonstrationRecorder {
           action.timestampOffsetMs - selection.timestampOffsetMs <= 600,
       );
     });
+  }
+
+  #normalizeEditingKeyboardNoise() {
+    if (!this.#session) return;
+    const editingActions = this.#session.actions.filter(
+      (action) =>
+        action.action === "fill" &&
+        Boolean(action.editingTransaction) &&
+        Boolean(action.target),
+    );
+    this.#session.actions = this.#session.actions.filter((action) => {
+      if (action.action !== "keyboard" || !action.key || !action.target)
+        return true;
+      const terminalKey = action.key.split("+").at(-1) ?? action.key;
+      const representsTextInput =
+        [...terminalKey].length === 1 ||
+        ["Shift", "Meta", "Control", "Alt", "AltGraph"].includes(terminalKey);
+      if (!representsTextInput) return true;
+      return !editingActions.some(
+        (edit) =>
+          edit.pageContextId === action.pageContextId &&
+          edit.target?.fingerprint === action.target?.fingerprint &&
+          Math.abs(edit.timestampOffsetMs - action.timestampOffsetMs) <= 1_500,
+      );
+    });
+  }
+
+  #normalizeCascadedToggleReactions() {
+    if (!this.#session) return;
+    const normalized: RecordedAction[] = [];
+    for (const action of this.#session.actions) {
+      const previous = normalized.at(-1);
+      if (isCascadedToggleReaction(previous, action)) {
+        if (
+          previous &&
+          !previous.observedEffects.some(
+            (effect) => effect.type === "dom-change",
+          )
+        )
+          previous.observedEffects.push({
+            type: "dom-change",
+            pageContextId: previous.pageContextId,
+            description:
+              "The demonstrated toggle caused a related site-managed control update.",
+          });
+        continue;
+      }
+      normalized.push(action);
+    }
+    this.#session.actions = normalized;
   }
 
   #handleGraphEvent(event: PageGraphEvent) {

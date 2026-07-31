@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type {
   DemonstrationSession,
+  RuntimeValueTransform,
+  StepExecutionGuard,
   WorkflowVariable,
 } from "../../demonstration-ir/src";
 
@@ -58,4 +60,96 @@ export function assertNoLocalValuesInSession(
       );
     }
   }
+}
+
+export type RuntimeValueTransformAudit = {
+  numericCandidates: number;
+  excludedNumericCandidates: number;
+  eligibleNumberFound: boolean;
+};
+
+function parseLocaleNumber(token: string) {
+  const compact = token.replaceAll(/[\s\u00a0\u202f]/g, "");
+  const lastComma = compact.lastIndexOf(",");
+  const lastDot = compact.lastIndexOf(".");
+  const decimalIndex = Math.max(lastComma, lastDot);
+  const normalized =
+    decimalIndex < 0
+      ? compact
+      : `${compact.slice(0, decimalIndex).replaceAll(/[.,]/g, "")}.${compact.slice(decimalIndex + 1)}`;
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function numberTokens(text: string) {
+  return [
+    ...text.matchAll(
+      /(?<![\p{L}\p{N}])(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[.,]\d+)?(?![\p{L}\p{N}])/gu,
+    ),
+  ].map((match) => match[0]);
+}
+
+export function applyRuntimeValueTransforms(
+  input: string,
+  transforms: RuntimeValueTransform[],
+) {
+  let value = input;
+  const audit: RuntimeValueTransformAudit = {
+    numericCandidates: 0,
+    excludedNumericCandidates: 0,
+    eligibleNumberFound: false,
+  };
+  for (const transform of transforms) {
+    if (transform.type !== "number-in-range") continue;
+    const candidates = numberTokens(value)
+      .map((token) => ({ token, numeric: parseLocaleNumber(token) }))
+      .filter(
+        (
+          candidate,
+        ): candidate is {
+          token: string;
+          numeric: number;
+        } => candidate.numeric !== undefined,
+      );
+    audit.numericCandidates += candidates.length;
+    const eligible = candidates.find((candidate) => {
+      const excluded = transform.excludedNumbers.some(
+        (value) => Math.abs(value - candidate.numeric) < Number.EPSILON * 16,
+      );
+      if (excluded) audit.excludedNumericCandidates += 1;
+      return (
+        !excluded &&
+        candidate.numeric >= transform.minimum &&
+        candidate.numeric <= transform.maximum
+      );
+    });
+    if (!eligible)
+      throw new Error(
+        "No eligible numeric value satisfied the deterministic extraction rule.",
+      );
+    audit.eligibleNumberFound = true;
+    value = eligible.token.replaceAll(/[\s\u00a0\u202f]/g, "");
+  }
+  return { value, audit };
+}
+
+function escapeRegularExpression(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function runtimeGuardMatches(
+  guard: StepExecutionGuard,
+  values: ReadonlyMap<string, string>,
+) {
+  const value = values.get(guard.variableName);
+  if (value === undefined)
+    throw new Error(
+      `Missing ephemeral runtime variable: ${guard.variableName}`,
+    );
+  const flags = guard.caseSensitive ? "u" : "iu";
+  const escaped = escapeRegularExpression(guard.keyword);
+  const pattern = guard.wholeWord
+    ? `(?:^|[^\\p{L}\\p{N}_])${escaped}(?:$|[^\\p{L}\\p{N}_])`
+    : escaped;
+  return new RegExp(pattern, flags).test(value);
 }

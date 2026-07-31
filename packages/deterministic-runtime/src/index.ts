@@ -27,14 +27,17 @@ import {
   safeTelemetryMessage,
 } from "../../telemetry/src";
 import {
+  applyRuntimeValueTransforms,
   LocalVariableValuesSchema,
   resolveValueReference,
+  runtimeGuardMatches,
   type LocalVariableValues,
 } from "../../workflow-variables/src";
 import {
   canonicalizeUrl,
   escapeForAttribute,
   isOpenAIUrl,
+  sha256,
 } from "../../shared/src";
 
 export type RuntimeAnimation = {
@@ -362,6 +365,8 @@ export class DeterministicRuntime {
   #dialogCursor = 0;
   readonly #ephemeralValues = new Map<string, string>();
   readonly #outcomeBaselines = new Map<string, string | number>();
+  readonly #extractionAudit: RuntimeTelemetry["extractionAudit"] = [];
+  #loopIteration = 0;
   #routeInstalled = false;
   #networkHandler: ((route: Route) => Promise<void>) | undefined;
   #dialogHandler: ((dialog: Dialog) => Promise<void>) | undefined;
@@ -379,65 +384,123 @@ export class DeterministicRuntime {
       this.options.mode,
     );
     telemetry.state = "Running";
+    const loop = this.#workflow.loops[0];
+    const requestedIterations = loop?.maximumIterations ?? 1;
+    const loopStartedAt = Date.now();
+    const loopFingerprints = new Set<string>();
+    let completedIterations = 0;
+    let duplicateProtectionTriggered = false;
     this.#installDialogHandler();
     await this.#installNetworkGuard();
     try {
-      await this.#resolveInitialContexts();
-      await this.#captureOutcomeBaselines();
-      for (const [stepIndex, step] of this.#workflow.steps.entries()) {
+      for (
+        this.#loopIteration = 0;
+        this.#loopIteration < requestedIterations;
+        this.#loopIteration += 1
+      ) {
         throwIfStopped(this.options.signal);
-        const started = Date.now();
-        if (this.#isRedundantLegacySelectionClick(step, stepIndex)) {
-          telemetry.steps.push({
-            stepId: step.id,
-            pageContextId: step.pageContextId,
-            action: step.action,
-            status: "skipped",
-            durationMs: Date.now() - started,
-            message:
-              "Skipped a redundant legacy click surrounding the demonstrated select action.",
-          });
-          continue;
+        if (loop && Date.now() - loopStartedAt >= loop.maximumDurationMs)
+          throw new Error(
+            "Bounded workflow duration elapsed before all requested iterations completed.",
+          );
+        this.#resetIterationState();
+        await this.#resolveInitialContexts();
+        if (loop?.duplicateItemProtection) {
+          const fingerprint = await this.#currentLoopItemFingerprint(loop);
+          if (loopFingerprints.has(fingerprint)) {
+            duplicateProtectionTriggered = true;
+            throw new Error(
+              "Duplicate item protection stopped the workflow before replaying the same record.",
+            );
+          }
+          loopFingerprints.add(fingerprint);
         }
-        try {
-          const result = await this.#runStep(step);
-          telemetry.steps.push({
-            stepId: step.id,
-            pageContextId: step.pageContextId,
-            action: step.action,
-            status: result.skipped ? "skipped" : "passed",
-            durationMs: Date.now() - started,
-            ...(result.candidate
-              ? { locatorStrategy: result.candidate.strategy }
-              : {}),
-            message: result.message,
-          });
-        } catch (error) {
-          if (step.optional) {
+        await this.#captureOutcomeBaselines();
+        for (const [stepIndex, step] of this.#workflow.steps.entries()) {
+          throwIfStopped(this.options.signal);
+          const started = Date.now();
+          const iterationLabel =
+            requestedIterations > 1
+              ? `Iteration ${this.#loopIteration + 1}/${requestedIterations}: `
+              : "";
+          if (step.executionGuard) {
+            const matched = runtimeGuardMatches(
+              step.executionGuard,
+              this.#ephemeralValues,
+            );
+            this.#recordKeywordAudit(
+              step.executionGuard.variableName,
+              step.executionGuard.keyword,
+              matched,
+            );
+            if (!matched) {
+              telemetry.steps.push({
+                stepId: step.id,
+                pageContextId: step.pageContextId,
+                action: step.action,
+                status: "skipped",
+                durationMs: Date.now() - started,
+                message: `${iterationLabel}Skipped because the deterministic keyword condition was false.`,
+              });
+              continue;
+            }
+          }
+          if (this.#isRedundantLegacySelectionClick(step, stepIndex)) {
             telemetry.steps.push({
               stepId: step.id,
               pageContextId: step.pageContextId,
               action: step.action,
               status: "skipped",
               durationMs: Date.now() - started,
-              message: safeTelemetryMessage(error),
+              message: `${iterationLabel}Skipped a redundant legacy click surrounding the demonstrated select action.`,
             });
             continue;
           }
-          throw Object.assign(
-            error instanceof Error ? error : new Error(String(error)),
-            {
-              step,
-            },
-          );
+          try {
+            const result = await this.#runStep(step);
+            telemetry.steps.push({
+              stepId: step.id,
+              pageContextId: step.pageContextId,
+              action: step.action,
+              status: result.skipped ? "skipped" : "passed",
+              durationMs: Date.now() - started,
+              ...(result.candidate
+                ? { locatorStrategy: result.candidate.strategy }
+                : {}),
+              message: `${iterationLabel}${result.message}`,
+            });
+          } catch (error) {
+            if (step.optional) {
+              telemetry.steps.push({
+                stepId: step.id,
+                pageContextId: step.pageContextId,
+                action: step.action,
+                status: "skipped",
+                durationMs: Date.now() - started,
+                message: `${iterationLabel}${safeTelemetryMessage(error)}`,
+              });
+              continue;
+            }
+            throw Object.assign(
+              error instanceof Error ? error : new Error(String(error)),
+              {
+                step,
+              },
+            );
+          }
         }
+        throwIfStopped(this.options.signal);
+        await this.options.animation?.beforeStep?.({
+          step: this.#workflow.steps.at(-1)!,
+          phase: "Verifying outcome",
+        });
+        telemetry.outcomeChecks = await this.#verifyOutcome();
+        completedIterations += 1;
+        if (requestedIterations > 1)
+          telemetry.redactedLog.push(
+            `Completed bounded local iteration ${completedIterations} of ${requestedIterations}.`,
+          );
       }
-      throwIfStopped(this.options.signal);
-      await this.options.animation?.beforeStep?.({
-        step: this.#workflow.steps.at(-1)!,
-        phase: "Verifying outcome",
-      });
-      telemetry.outcomeChecks = await this.#verifyOutcome();
       if (this.#blockedOpenAIAttempts > 0) {
         throw new Error(
           "Runtime blocked an attempted OpenAI request; execution failed closed.",
@@ -485,6 +548,13 @@ export class DeterministicRuntime {
       }
     } finally {
       telemetry.finishedAt = new Date().toISOString();
+      telemetry.extractionAudit = [...this.#extractionAudit];
+      if (loop)
+        telemetry.loop = {
+          requestedIterations,
+          completedIterations,
+          duplicateProtectionTriggered,
+        };
       await this.#cleanupTransientHandlers();
     }
     return RuntimeTelemetrySchema.parse(telemetry);
@@ -517,18 +587,86 @@ export class DeterministicRuntime {
   #resolveStepValue(step: CompiledStep) {
     if (step.value?.kind === "literal") return step.value.value;
     if (step.value?.kind === "runtime-variable") {
-      const value = this.#ephemeralValues.get(step.value.name);
+      const variableName = step.value.name;
+      const value = this.#ephemeralValues.get(variableName);
       if (value === undefined)
-        throw new Error(
-          `Missing ephemeral runtime variable: ${step.value.name}`,
-        );
-      return value;
+        throw new Error(`Missing ephemeral runtime variable: ${variableName}`);
+      const transformed = applyRuntimeValueTransforms(
+        value,
+        step.valueTransforms,
+      );
+      const audit = [...this.#extractionAudit]
+        .reverse()
+        .find((entry) => entry.variableName === variableName);
+      if (audit) {
+        audit.numericCandidates = transformed.audit.numericCandidates;
+        audit.excludedNumericCandidates =
+          transformed.audit.excludedNumericCandidates;
+        audit.eligibleNumberFound = transformed.audit.eligibleNumberFound;
+      }
+      return transformed.value;
     }
     return resolveValueReference(
       step.valueRef,
       step.localLiteral,
       this.#variables,
     );
+  }
+
+  #resetIterationState() {
+    this.#pages.resolved.clear();
+    this.#pages.runtimePopups.clear();
+    this.#pages.closedContexts.clear();
+    this.#ephemeralValues.clear();
+    this.#outcomeBaselines.clear();
+    this.#activeDialog = undefined;
+    this.#dialogCursor = 0;
+  }
+
+  #loopAnchorStep(loop: CompiledLoop) {
+    return this.#workflow.steps.find(
+      (step) =>
+        loop.templateStepIds.includes(step.id) &&
+        step.action === "click" &&
+        Boolean(step.target),
+    );
+  }
+
+  async #currentLoopItemFingerprint(loop: CompiledLoop) {
+    const anchor = this.#loopAnchorStep(loop);
+    if (!anchor) return sha256(`${loop.id}:${this.#loopIteration}`);
+    const { locator } = await this.#resolveLocator(anchor);
+    if (!locator)
+      throw new Error(
+        "The bounded workflow has no deterministic record anchor.",
+      );
+    const signature = await locator.evaluate((element) => {
+      const row = element.closest("tr,[role=row],li");
+      const href =
+        element instanceof HTMLAnchorElement
+          ? new URL(element.href).pathname
+          : "";
+      return [
+        element.tagName.toLowerCase(),
+        href,
+        String(row?.textContent ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      ].join("|");
+    });
+    return sha256(signature);
+  }
+
+  #recordKeywordAudit(variableName: string, keyword: string, matched: boolean) {
+    const audit = [...this.#extractionAudit]
+      .reverse()
+      .find((entry) => entry.variableName === variableName);
+    if (!audit) return;
+    const existing = audit.keywordChecks.find(
+      (entry) => entry.keyword === keyword,
+    );
+    if (existing) existing.matched = matched;
+    else audit.keywordChecks.push({ keyword, matched });
   }
 
   #installDialogHandler() {
@@ -825,7 +963,7 @@ export class DeterministicRuntime {
     });
     const deadline = Date.now() + this.#timeout;
     do {
-      for (const { candidate, rule } of runtimeLocatorAttempts(step)) {
+      for (const { candidate, rule } of this.#locatorAttempts(step)) {
         const locator = locatorForRule(root, rule);
         if ((await locator.count().catch(() => 0)) !== 1) continue;
         if (!(await locator.isVisible().catch(() => false))) continue;
@@ -877,6 +1015,40 @@ export class DeterministicRuntime {
     );
   }
 
+  #locatorAttempts(step: CompiledStep) {
+    const attempts = runtimeLocatorAttempts(step);
+    const loop = this.#workflow.loops[0];
+    const anchor = loop ? this.#loopAnchorStep(loop) : undefined;
+    if (
+      !loop ||
+      this.#loopIteration === 0 ||
+      anchor?.id !== step.id ||
+      loop.nextItemRelationship !== "next-row"
+    )
+      return attempts;
+    const shifted = attempts.flatMap(({ candidate, rule }) =>
+      rule.rowIndex !== undefined && rule.columnIndex !== undefined
+        ? [
+            {
+              candidate,
+              rule: {
+                ...rule,
+                strategy: "same-row-column" as const,
+                rowIndex: rule.rowIndex + this.#loopIteration,
+                rowText: undefined,
+                rowTexts: undefined,
+                iconAlt: undefined,
+                iconTitle: undefined,
+                iconSrc: undefined,
+                iconTag: undefined,
+              },
+            },
+          ]
+        : [],
+    );
+    return [...shifted, ...attempts];
+  }
+
   #isRedundantLegacySelectionClick(step: CompiledStep, stepIndex: number) {
     if (
       step.action !== "click" ||
@@ -904,6 +1076,51 @@ export class DeterministicRuntime {
         return element.value;
       return element.textContent ?? "";
     });
+  }
+
+  async #readExtractedValue(step: CompiledStep, locator: Locator) {
+    if (step.extractionSelection?.mode === "text-range") {
+      const result = await locator
+        .evaluate((element, evidence) => {
+          const nodeAtPath = (root: Node, path: number[]) => {
+            let current: Node | undefined = root;
+            for (const index of path) current = current?.childNodes[index];
+            return current;
+          };
+          const start = nodeAtPath(element, evidence.startPath);
+          const end = nodeAtPath(element, evidence.endPath);
+          if (!start || !end)
+            return {
+              value:
+                element instanceof HTMLInputElement ||
+                element instanceof HTMLTextAreaElement
+                  ? element.value
+                  : (element.textContent ?? ""),
+              replayed: false,
+            };
+          const range = element.ownerDocument.createRange();
+          try {
+            range.setStart(start, evidence.startOffset);
+            range.setEnd(end, evidence.endOffset);
+          } catch {
+            return {
+              value: element.textContent ?? "",
+              replayed: false,
+            };
+          }
+          const selection = element.ownerDocument.getSelection();
+          selection?.removeAllRanges();
+          selection?.addRange(range);
+          return { value: range.toString(), replayed: true };
+        }, step.extractionSelection)
+        .catch(() => undefined);
+      if (result) return result;
+    }
+    await locator.selectText().catch(() => undefined);
+    return {
+      value: await this.#readEditableValue(locator),
+      replayed: step.extractionSelection?.mode === "element",
+    };
   }
 
   async #verifyEnteredValue(
@@ -1138,8 +1355,23 @@ export class DeterministicRuntime {
     if (step.action === "extract") {
       if (!step.outputVariable)
         throw new Error("Extract step is missing its ephemeral output.");
-      const value = await this.#readEditableValue(locator);
-      this.#ephemeralValues.set(step.outputVariable, value);
+      const extracted = await this.#readExtractedValue(step, locator);
+      this.#ephemeralValues.set(step.outputVariable, extracted.value);
+      await locator.dispatchEvent("copy").catch(() => undefined);
+      this.#extractionAudit.push({
+        stepId: step.id,
+        pageContextId: step.pageContextId,
+        variableName: step.outputVariable,
+        sourceFingerprint: step.target?.fingerprint ?? sha256(step.id),
+        characterCount: extracted.value.length,
+        contentSha256: sha256(extracted.value),
+        structuralSelectionReplayed: extracted.replayed,
+        numericCandidates: 0,
+        excludedNumericCandidates: 0,
+        eligibleNumberFound: false,
+        keywordChecks: [],
+        rawTextPersisted: false,
+      });
     } else if (step.action === "click")
       await locator.click({ timeout: this.#timeout });
     else if (step.action === "double-click")
