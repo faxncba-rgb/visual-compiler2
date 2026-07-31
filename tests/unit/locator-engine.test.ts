@@ -129,6 +129,40 @@ function anonymousDescendantTarget() {
   return value;
 }
 
+function anonymousPopupExtractionTarget() {
+  const value = target();
+  value.tag = "span";
+  value.role = undefined;
+  value.accessibleName = undefined;
+  value.associatedLabel = undefined;
+  value.editable = false;
+  value.semanticContainer = undefined;
+  value.structuralPath =
+    "tbody:nth-of-type(2) > tr > td > div:nth-of-type(1) > div:nth-of-type(3) > div:nth-of-type(8) > span:nth-of-type(1)";
+  value.stableAttributes = {};
+  value.descriptor = {
+    ...value.descriptor!,
+    controlFamily: "other",
+    multiline: false,
+    editable: false,
+    actionCompatibility: ["extract"],
+    tag: "span",
+    role: undefined,
+    accessibleName: undefined,
+    associatedLabel: undefined,
+    normalizedStaticText: undefined,
+    hasOnclick: false,
+    rawTargetPromoted: false,
+  };
+  value.captureValidation = {
+    exactTargetConnected: true,
+    roleNameMatchCount: 0,
+    labelMatchCount: 0,
+    stableAttributeMatchCount: 0,
+  };
+  return value;
+}
+
 describe("demonstration-first locator engine", () => {
   it("preserves the exact consultation editor instead of choosing the first textbox", () => {
     const candidates = generateLocatorCandidates(target());
@@ -171,6 +205,31 @@ describe("demonstration-first locator engine", () => {
     });
     expect(selected.matchCount).toBe(1);
     expect(selected.explanation).toContain("transient context had closed");
+  });
+
+  it("retains an exact structural locator for an anonymous popup extraction zone", () => {
+    const extractionTarget = anonymousPopupExtractionTarget();
+    const candidates = generateLocatorCandidates(extractionTarget);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      strategy: "structural-fallback",
+      rule: {
+        strategy: "structural-fallback",
+        structuralPath: extractionTarget.structuralPath,
+      },
+      confidence: 0.9,
+    });
+    const selected = selectDemonstratedLocator(
+      validateCapturedLocatorCandidates(extractionTarget, candidates),
+      {
+        target: extractionTarget,
+        action: "extract",
+      },
+    );
+    expect(selected.unique).toBe(true);
+    expect(selected.visibleCount).toBe(1);
+    expect(selected.enabledCount).toBe(1);
+    expect(selected.typeCompatibleCount).toBe(1);
   });
 
   it("reports redacted structural rejection evidence", () => {

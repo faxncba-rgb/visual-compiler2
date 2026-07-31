@@ -417,6 +417,29 @@ export function generateLocatorCandidates(
     );
   }
   if (
+    target.structuralPath &&
+    target.captureValidation.exactTargetConnected &&
+    target.descriptor?.actionCompatibility.includes("extract")
+  ) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "structural-fallback",
+          structuralPath: target.structuralPath,
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
+        },
+        target.structuralPath,
+        0.9,
+        0.86,
+        "Exact connected extraction zone retained from the demonstrated popup structure.",
+        order++,
+      ),
+    );
+  }
+  if (
     target.frame.role === "same-origin" &&
     target.tag === "body" &&
     target.role === "textbox" &&
