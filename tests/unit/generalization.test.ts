@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AiGeneralizationOutputSchema,
   COMPILE_MODEL,
+  LIVE_COMPILE_TIMEOUT_MS,
   MockGeneralizationProvider,
   OpenAiCompileProvider,
   buildAiPayload,
@@ -214,6 +215,8 @@ describe("strict AI generalization boundary", () => {
       reasoning: { effort: "medium" },
       text: { format: { type: "json_schema", strict: true } },
     });
+    expect(LIVE_COMPILE_TIMEOUT_MS).toBe(240_000);
+    expect(request?.init?.signal?.aborted).toBe(false);
     expect(String(request?.init?.body)).not.toContain("test-only-key");
   });
 

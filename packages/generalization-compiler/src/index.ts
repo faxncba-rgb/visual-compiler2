@@ -27,6 +27,7 @@ import { createId, sha256 } from "../../shared/src";
 
 export const PROMPT_VERSION = "semantic-enrichment-gpt-5.6-v5";
 export const COMPILE_MODEL = "gpt-5.6";
+export const LIVE_COMPILE_TIMEOUT_MS = 240_000;
 
 export type CompilationStage =
   | "demonstration-validation"
@@ -526,7 +527,7 @@ export class OpenAiCompileProvider implements GeneralizationProvider {
             },
           },
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(LIVE_COMPILE_TIMEOUT_MS),
       },
     );
     if (!response.ok)
