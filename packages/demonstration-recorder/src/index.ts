@@ -589,6 +589,21 @@ const RECORDER_INIT_SCRIPT = `(() => {
     const targetName = accessibleName(element);
     const targetLabel = label(element);
     const stableProbe = element.getAttribute('data-vc-field') || element.getAttribute('data-vc-action') || element.getAttribute('name');
+    const formControlName = element.getAttribute('name');
+    const dynamicNameMatch = formControlName?.match(/^(.+_)\d+$/);
+    const dynamicNamePrefix = dynamicNameMatch?.[1];
+    const dynamicNamePeers = dynamicNamePrefix
+      ? allElements.filter(node =>
+          node.tagName === element.tagName &&
+          node.getAttribute('name')?.startsWith(dynamicNamePrefix)
+        )
+      : [];
+    const dynamicFormControlIdentity = dynamicNamePrefix
+      ? {
+          namePrefix: dynamicNamePrefix,
+          ordinal: Math.max(0, dynamicNamePeers.indexOf(element))
+        }
+      : undefined;
     const transientAncestor = element.closest('[role=menu],[role=listbox],[role=dialog],dialog,[popover]');
     const raw = rawElement instanceof Element ? rawElement : element;
     const icon = raw.matches('img,svg,use,i,[role=img]') ? raw :
@@ -762,6 +777,7 @@ const RECORDER_INIT_SCRIPT = `(() => {
       precedingLabels,
       relatedActionName,
       stableAttributes,
+      dynamicFormControlIdentity,
       unstableAttributes: ['id','class'],
       structuralPath: cssPath(element),
       beforeFingerprint: hash(signature + '|' + element.getAttribute('aria-expanded') + '|' + element.getAttribute('aria-checked')),
@@ -939,11 +955,18 @@ const RECORDER_INIT_SCRIPT = `(() => {
       endOffset: range.endOffset
     };
   };
+  const selectedExtractionRoot = () => {
+    const selection = globalThis.getSelection?.();
+    if (!selection || selection.rangeCount !== 1 || selection.isCollapsed)
+      return undefined;
+    const common = selection.getRangeAt(0).commonAncestorContainer;
+    return common instanceof Element ? common : common.parentElement || undefined;
+  };
   document.addEventListener('copy', event => {
     flushEdit('commit');
-    const root = event.target instanceof Element
+    const root = selectedExtractionRoot() || (event.target instanceof Element
       ? event.target
-      : event.target?.parentElement;
+      : event.target?.parentElement);
     const info = target(root);
     if (!info || info.password || info.forbiddenValue) return;
     send({

@@ -125,7 +125,7 @@ export function applyRuntimeValueTransforms(
     });
     if (!eligible)
       throw new Error(
-        "No eligible numeric value satisfied the deterministic extraction rule.",
+        `No eligible numeric value satisfied the deterministic extraction rule. Redacted extraction evidence: numericCandidates=${audit.numericCandidates}, excludedNumericCandidates=${audit.excludedNumericCandidates}.`,
       );
     audit.eligibleNumberFound = true;
     value = eligible.token.replaceAll(/[\s\u00a0\u202f]/g, "");

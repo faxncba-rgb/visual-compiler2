@@ -178,6 +178,32 @@ describe("demonstration-first locator engine", () => {
     ).toBe(true);
   });
 
+  it("preserves a dynamic form-control family and its demonstrated ordinal", () => {
+    const demonstratedTarget = target();
+    demonstratedTarget.tag = "input";
+    demonstratedTarget.stableAttributes = { name: "dho_1503004" };
+    demonstratedTarget.dynamicFormControlIdentity = {
+      namePrefix: "dho_",
+      ordinal: 0,
+    };
+    const candidates = generateLocatorCandidates(demonstratedTarget);
+    const dynamicCandidate = candidates.find(
+      (candidate) => candidate.strategy === "form-control-prefix-ordinal",
+    );
+    expect(dynamicCandidate).toMatchObject({
+      strategy: "form-control-prefix-ordinal",
+      rule: {
+        strategy: "form-control-prefix-ordinal",
+        formControlNamePrefix: "dho_",
+        ordinal: 0,
+        tagName: "input",
+      },
+    });
+    expect(dynamicCandidate?.selectorPreview).toBe(
+      'input[name^="dho_"].nth(0)',
+    );
+  });
+
   it("ranks semantic uniqueness above generic or coordinate fallbacks", () => {
     const exact = candidate();
     const coordinate = candidate({
@@ -495,6 +521,35 @@ describe("demonstration-first locator engine", () => {
         action: "click",
       }).strategy,
     ).toBe("row-icon-context");
+  });
+
+  it("retains a unique icon independently of a patient-specific link href", () => {
+    const demonstratedTarget = anonymousIconTarget();
+    demonstratedTarget.clickEvidence = {
+      ...demonstratedTarget.clickEvidence!,
+      icon: {
+        tag: "img",
+        title: "Modifier/Ajouter un modificateur",
+        src: "https://synthetic.invalid/images/modifier.gif",
+      },
+      captureValidation: {
+        ...demonstratedTarget.clickEvidence!.captureValidation,
+        iconMatchCount: 1,
+      },
+    };
+    const candidate = generateLocatorCandidates(demonstratedTarget).find(
+      (entry) =>
+        entry.strategy === "icon-evidence" &&
+        entry.rule.canonicalHref === undefined,
+    );
+    expect(candidate).toMatchObject({
+      strategy: "icon-evidence",
+      selectorPreview: "clickable:has(unique-captured-icon)",
+      rule: {
+        iconTitle: "Modifier/Ajouter un modificateur",
+        iconSrc: "https://synthetic.invalid/images/modifier.gif",
+      },
+    });
   });
 
   it("promotes an anonymous <em> descendant and resolves the unique row clickable among duplicate hrefs", () => {

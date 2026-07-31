@@ -52,6 +52,7 @@ const strategyWeight: Record<LocatorCandidate["strategy"], number> = {
   "role-name": 1,
   "label-association": 0.97,
   "form-control-name": 0.9,
+  "form-control-prefix-ordinal": 0.94,
   "container-role-name": 0.92,
   "text-dom-relation": 0.98,
   "form-ownership": 0.9,
@@ -161,6 +162,28 @@ export function generateLocatorCandidates(
     );
   }
   const formControlName = target.stableAttributes.name;
+  const dynamicFormControlIdentity = target.dynamicFormControlIdentity;
+  if (dynamicFormControlIdentity) {
+    candidates.push(
+      baseCandidate(
+        target,
+        {
+          strategy: "form-control-prefix-ordinal",
+          formControlNamePrefix: dynamicFormControlIdentity.namePrefix,
+          ordinal: dynamicFormControlIdentity.ordinal,
+          tagName: target.tag,
+          ...(target.frame.role !== "main" && target.frame.title
+            ? { frameTitle: target.frame.title }
+            : {}),
+        },
+        `${target.tag}[name^="${escapeForAttribute(dynamicFormControlIdentity.namePrefix)}"].nth(${dynamicFormControlIdentity.ordinal})`,
+        0.95,
+        0.94,
+        "Captured form-control name family and demonstrated DOM ordinal.",
+        order++,
+      ),
+    );
+  }
   if (formControlName) {
     candidates.push(
       baseCandidate(
@@ -252,6 +275,24 @@ export function generateLocatorCandidates(
     );
   }
   if (click?.icon && (click.icon.alt || click.icon.title || click.icon.src)) {
+    if (click.captureValidation.iconMatchCount === 1) {
+      candidates.push(
+        baseCandidate(
+          target,
+          {
+            strategy: "icon-evidence",
+            ...(click.icon.alt ? { iconAlt: click.icon.alt } : {}),
+            ...(click.icon.title ? { iconTitle: click.icon.title } : {}),
+            ...(click.icon.src ? { iconSrc: click.icon.src } : {}),
+          },
+          "clickable:has(unique-captured-icon)",
+          0.98,
+          0.96,
+          "The captured icon was unique before navigation and remains independent of a mutable link href.",
+          order++,
+        ),
+      );
+    }
     candidates.push(
       baseCandidate(
         target,
@@ -510,6 +551,19 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       throw new Error("Form-control locator is incomplete.");
     return root.locator(`[name="${escapeForAttribute(rule.formControlName)}"]`);
   }
+  if (rule.strategy === "form-control-prefix-ordinal") {
+    if (
+      !rule.formControlNamePrefix ||
+      rule.ordinal === undefined ||
+      !rule.tagName
+    )
+      throw new Error("Form-control family locator is incomplete.");
+    return root
+      .locator(
+        `${rule.tagName}[name^="${escapeForAttribute(rule.formControlNamePrefix)}"]`,
+      )
+      .nth(rule.ordinal);
+  }
   if (rule.strategy === "container-role-name") {
     if (!rule.containerHeading || !rule.role || !rule.name)
       throw new Error("Container role/name locator is incomplete.");
@@ -559,6 +613,8 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
       : "a[href],a[onclick],[role=link]";
     const iconSelector = iconEvidenceSelector(rule);
     let scope: Locator = root.locator(hrefSelector);
+    if (rule.strategy === "canonical-href" && rule.ordinal !== undefined)
+      scope = scope.nth(rule.ordinal);
     if (
       rule.strategy === "row-icon-context" ||
       rule.strategy === "row-clickable-context" ||
@@ -577,21 +633,35 @@ export function locatorForRule(root: LocatorRoot, rule: LocatorRule): Locator {
         throw new Error("Row/icon locator is missing a demonstrated row.");
       let row: Locator;
       if (rule.strategy === "same-row-column") {
-        let table = rule.formName
-          ? root
-              .locator(`form[name="${escapeForAttribute(rule.formName)}"]`)
-              .locator("table")
-          : root.locator("table");
-        table = table.filter({ has: root.locator(hrefSelector) });
-        if (rule.columnHeader && rule.columnIndex !== undefined) {
-          const headerCell = root
-            .locator(`tr > :is(th,td):nth-child(${rule.columnIndex + 1})`)
-            .filter({
-              hasText: exactStaticTextPattern(rule.columnHeader),
-            });
-          table = table.filter({ has: headerCell });
+        if (rule.ordinal !== undefined && rule.columnIndex !== undefined) {
+          const hrefInDemonstratedColumn = hrefSelector
+            .split(",")
+            .map(
+              (selector) =>
+                `:scope > :is(th,td):nth-child(${rule.columnIndex! + 1}) ${selector}`,
+            )
+            .join(",");
+          row = root
+            .locator("tr")
+            .filter({ has: root.locator(hrefInDemonstratedColumn) })
+            .nth(rule.ordinal);
+        } else {
+          let table = rule.formName
+            ? root
+                .locator(`form[name="${escapeForAttribute(rule.formName)}"]`)
+                .locator("table")
+            : root.locator("table");
+          table = table.filter({ has: root.locator(hrefSelector) });
+          if (rule.columnHeader && rule.columnIndex !== undefined) {
+            const headerCell = root
+              .locator(`tr > :is(th,td):nth-child(${rule.columnIndex + 1})`)
+              .filter({
+                hasText: exactStaticTextPattern(rule.columnHeader),
+              });
+            table = table.filter({ has: headerCell });
+          }
+          row = table.locator("tr").nth(rule.rowIndex!);
         }
-        row = table.locator("tr").nth(rule.rowIndex!);
       } else {
         row = root.locator("tr");
         for (const rowText of rowTexts) row = row.filter({ hasText: rowText });
@@ -817,9 +887,11 @@ export function validateCapturedLocatorCandidates(
                       ? target.clickEvidence?.icon
                         ? capturedRowContextMatchCount(target)
                         : capturedRowClickableMatchCount(target)
-                      : ["form-control-name", "stable-attribute"].includes(
-                            candidate.strategy,
-                          )
+                      : [
+                            "form-control-name",
+                            "form-control-prefix-ordinal",
+                            "stable-attribute",
+                          ].includes(candidate.strategy)
                         ? target.captureValidation.stableAttributeMatchCount
                         : 1;
       return LocatorCandidateSchema.parse({

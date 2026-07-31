@@ -1267,6 +1267,15 @@ function isForensicOnlyAction(
 ) {
   const action = actions[index]!;
   if (sameToggleFamily(actions[index - 1], action)) return true;
+  const previous = actions[index - 1];
+  if (
+    action.action === "submit" &&
+    previous?.action === "click" &&
+    previous.pageContextId === action.pageContextId &&
+    previous.target?.fingerprint === action.target?.fingerprint &&
+    action.timestampOffsetMs - previous.timestampOffsetMs <= 1_000
+  )
+    return true;
   if (action.action !== "keyboard" || !action.key) return false;
   const followingExtract = actions
     .slice(index + 1)
@@ -1699,6 +1708,8 @@ function generatedLocator(
     return `${root}.locator(${JSON.stringify(rule.tagName)}).filter({ hasText: ${generatedExactTextPattern(rule.staticText ?? "")} })`;
   if (rule.strategy === "form-control-name")
     return `${root}.locator(${JSON.stringify(`[name="${rule.formControlName}"]`)})`;
+  if (rule.strategy === "form-control-prefix-ordinal")
+    return `${root}.locator(${JSON.stringify(`${rule.tagName}[name^="${rule.formControlNamePrefix}"]`)}).nth(${rule.ordinal ?? 0})`;
   if (rule.strategy === "stable-attribute")
     return `${root}.locator(${JSON.stringify(`[${rule.attribute}="${rule.attributeValue}"]`)})`;
   if (rule.strategy === "container-role-name") {

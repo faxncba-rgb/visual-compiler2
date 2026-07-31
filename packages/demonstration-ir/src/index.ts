@@ -118,6 +118,12 @@ export const DemonstratedTargetSchema = z.object({
   frame: FrameIdentitySchema,
   descriptor: DemonstratedTargetDescriptorSchema.optional(),
   stableAttributes: z.record(z.string()).default({}),
+  dynamicFormControlIdentity: z
+    .object({
+      namePrefix: z.string().min(1).max(120),
+      ordinal: z.number().int().nonnegative(),
+    })
+    .optional(),
   unstableAttributes: z.array(z.string()).default([]),
   structuralPath: z.string(),
   beforeFingerprint: z.string().optional(),
@@ -488,6 +494,7 @@ export const LocatorStrategySchema = z.enum([
   "role-name",
   "label-association",
   "form-control-name",
+  "form-control-prefix-ordinal",
   "container-role-name",
   "text-dom-relation",
   "form-ownership",
@@ -509,6 +516,8 @@ export const LocatorRuleSchema = z.object({
   name: z.string().optional(),
   label: z.string().optional(),
   formControlName: z.string().optional(),
+  formControlNamePrefix: z.string().optional(),
+  ordinal: z.number().int().nonnegative().optional(),
   containerHeading: z.string().optional(),
   attribute: z.string().optional(),
   attributeValue: z.string().optional(),
