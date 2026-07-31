@@ -128,6 +128,20 @@ function canonicalMatches(pageUrl: string, context: CompiledPageContext) {
   }
 }
 
+function normalizeContinuationPrompt(value: string) {
+  return value
+    .normalize("NFD")
+    .replaceAll(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("fr")
+    .replaceAll(/[^a-z0-9]+/g, " ")
+    .replaceAll(/\s+/g, " ")
+    .trim();
+}
+
+function isPermittedContinuationPrompt(value: string) {
+  return normalizeContinuationPrompt(value).includes("voulez vous continuer");
+}
+
 async function isTopDocumentInspectable(frame: Frame) {
   return frame
     .evaluate(() => {
@@ -364,6 +378,9 @@ export class DeterministicRuntime {
     | { type: string; response: "accepted" | "dismissed" }
     | undefined;
   #dialogCursor = 0;
+  #continuationConfirmationCount = 0;
+  #continuationDialogFailure: Error | undefined;
+  readonly #permittedContinuationPages = new Set<Page>();
   readonly #ephemeralValues = new Map<string, string>();
   readonly #outcomeBaselines = new Map<string, string | number>();
   readonly #extractionAudit: RuntimeTelemetry["extractionAudit"] = [];
@@ -573,6 +590,10 @@ export class DeterministicRuntime {
         });
       }
     } finally {
+      if (this.#continuationConfirmationCount > 0)
+        telemetry.redactedLog.push(
+          `Accepted ${this.#continuationConfirmationCount} permitted continuation confirmation${this.#continuationConfirmationCount === 1 ? "" : "s"}.`,
+        );
       telemetry.finishedAt = new Date().toISOString();
       telemetry.extractionAudit = [...this.#extractionAudit];
       if (loop)
@@ -807,6 +828,32 @@ export class DeterministicRuntime {
     );
     const handler = async (dialog: Dialog) => {
       const step = expected[this.#dialogCursor];
+      const continuationPolicy = this.#workflow.continuationConfirmationPolicy;
+      if (
+        continuationPolicy &&
+        isPermittedContinuationPrompt(dialog.message())
+      ) {
+        if (
+          this.#continuationConfirmationCount >=
+          continuationPolicy.maximumAcceptsPerRun
+        ) {
+          await dialog.dismiss();
+          this.#continuationDialogFailure = new Error(
+            "Permitted continuation confirmation limit was exceeded.",
+          );
+          return;
+        }
+        this.#continuationConfirmationCount += 1;
+        await dialog.accept();
+        return;
+      }
+      if (continuationPolicy && !step) {
+        await dialog.dismiss();
+        this.#continuationDialogFailure = new Error(
+          "Unexpected browser dialog did not match the configured continuation policy.",
+        );
+        return;
+      }
       const response = step?.name.includes("dismissed")
         ? "dismissed"
         : "accepted";
@@ -819,6 +866,150 @@ export class DeterministicRuntime {
     this.#pageDialogListener = (page) => page.on("dialog", handler);
     for (const page of this.options.context.pages()) page.on("dialog", handler);
     this.options.context.on("page", this.#pageDialogListener);
+  }
+
+  #throwContinuationDialogFailure() {
+    if (this.#continuationDialogFailure) throw this.#continuationDialogFailure;
+  }
+
+  #affirmativeContinuationControls(scope: Locator) {
+    return scope
+      .getByRole("button", { name: /^\s*oui\s*$/i })
+      .or(scope.getByRole("link", { name: /^\s*oui\s*$/i }))
+      .or(
+        scope.locator(
+          'input[type="button"][value="oui" i],input[type="submit"][value="oui" i]',
+        ),
+      );
+  }
+
+  async #acceptHtmlContinuationConfirmation() {
+    const continuationPolicy = this.#workflow.continuationConfirmationPolicy;
+    if (!continuationPolicy) return false;
+    const promptPattern = /voulez[\s\u00a0-]*vous[\s\u00a0]+continuer/i;
+    const dialogSelector =
+      'dialog,[role="dialog"],[aria-modal="true"],.modal,.ui-dialog';
+    const mainContext = this.#resolvedMainContext();
+    const mainResolved = mainContext
+      ? this.#pages.resolved.get(mainContext.id)
+      : undefined;
+    const mainPage = mainResolved
+      ? "mainFrame" in mainResolved
+        ? (mainResolved as Page)
+        : (mainResolved as Frame).page()
+      : undefined;
+    const matches: Array<{
+      page: Page;
+      scope: Locator;
+      control: Locator;
+      semantic: boolean;
+    }> = [];
+    let matchedConfirmation = false;
+    for (const page of this.options.context.pages()) {
+      if (page.isClosed()) continue;
+      const roots: Array<Page | Frame> = [
+        page,
+        ...page.frames().filter((frame) => frame !== page.mainFrame()),
+      ];
+      for (const root of roots) {
+        const semanticContainers = root
+          .locator(dialogSelector)
+          .filter({ hasText: promptPattern });
+        const visibleSemanticScopes: Locator[] = [];
+        const semanticCount = await semanticContainers.count().catch(() => 0);
+        for (let index = 0; index < semanticCount; index += 1) {
+          const scope = semanticContainers.nth(index);
+          if (!(await scope.isVisible().catch(() => false))) continue;
+          const nested = scope
+            .locator(dialogSelector)
+            .filter({ hasText: promptPattern });
+          if ((await nested.count().catch(() => 0)) > 0) continue;
+          visibleSemanticScopes.push(scope);
+        }
+        const scopes = [...visibleSemanticScopes];
+        if (scopes.length === 0) {
+          const body = root.locator("body").filter({ hasText: promptPattern });
+          if (await body.isVisible().catch(() => false)) {
+            const bodyControls = this.#affirmativeContinuationControls(body);
+            const bodyControlCount = await bodyControls.count().catch(() => 0);
+            let visibleBodyControl = false;
+            for (let index = 0; index < bodyControlCount; index += 1) {
+              const control = bodyControls.nth(index);
+              if (
+                (await control.isVisible().catch(() => false)) &&
+                (await control.isEnabled().catch(() => false))
+              ) {
+                visibleBodyControl = true;
+                break;
+              }
+            }
+            if (visibleBodyControl) scopes.push(body);
+          }
+        }
+        for (const scope of scopes) {
+          matchedConfirmation = true;
+          const controls = this.#affirmativeContinuationControls(scope);
+          const controlCount = await controls.count().catch(() => 0);
+          for (let index = 0; index < controlCount; index += 1) {
+            const control = controls.nth(index);
+            if (!(await control.isVisible().catch(() => false))) continue;
+            if (!(await control.isEnabled().catch(() => false))) continue;
+            matches.push({
+              page,
+              scope,
+              control,
+              semantic: visibleSemanticScopes.includes(scope),
+            });
+          }
+        }
+      }
+    }
+    if (!matchedConfirmation) return false;
+    if (matches.length !== 1)
+      throw new Error(
+        "Continuation confirmation did not expose exactly one visible enabled affirmative control.",
+      );
+    if (
+      this.#continuationConfirmationCount >=
+      continuationPolicy.maximumAcceptsPerRun
+    )
+      throw new Error(
+        "Permitted continuation confirmation limit was exceeded.",
+      );
+    const match = matches[0]!;
+    if (mainPage && match.page !== mainPage)
+      this.#permittedContinuationPages.add(match.page);
+    await match.control.click({ timeout: this.#timeout });
+    this.#continuationConfirmationCount += 1;
+    if (match.semantic) {
+      const deadline = Date.now() + Math.min(this.#timeout, 2_000);
+      while (
+        !match.page.isClosed() &&
+        (await match.scope.isVisible().catch(() => false)) &&
+        Date.now() < deadline
+      ) {
+        throwIfStopped(this.options.signal);
+        await waitForAbortableTimeout(20, this.options.signal);
+      }
+    } else if (!match.page.isClosed()) {
+      await waitForAbortableTimeout(100, this.options.signal);
+    }
+    return true;
+  }
+
+  async #settleContinuationConfirmation(maximumWaitMs: number) {
+    if (!this.#workflow.continuationConfirmationPolicy) return false;
+    const initialCount = this.#continuationConfirmationCount;
+    const deadline = Date.now() + maximumWaitMs;
+    do {
+      this.#throwContinuationDialogFailure();
+      if (await this.#acceptHtmlContinuationConfirmation()) return true;
+      if (this.#continuationConfirmationCount > initialCount) return true;
+      if (Date.now() >= deadline) break;
+      await waitForAbortableTimeout(25, this.options.signal);
+    } while (true);
+    this.#throwContinuationDialogFailure();
+    return this.#continuationConfirmationCount > initialCount;
   }
 
   async #cleanupTransientHandlers() {
@@ -1760,6 +1951,7 @@ export class DeterministicRuntime {
       const page =
         "mainFrame" in root ? (root as Page) : (root as Frame).page();
       await page.keyboard.press(step.key ?? "Enter");
+      await this.#settleContinuationConfirmation(250);
       return {
         message: `Executed page-level keyboard action ${step.key ?? "Enter"} without an element locator.`,
       };
@@ -1845,6 +2037,11 @@ export class DeterministicRuntime {
     } else {
       throw new Error(`Unsupported deterministic action ${step.action}.`);
     }
+
+    if (["keyboard", "submit"].includes(step.action))
+      await this.#settleContinuationConfirmation(250);
+    else if (["click", "double-click"].includes(step.action))
+      await this.#settleContinuationConfirmation(100);
 
     if (popupPromise && step.expectsPopupContextId) {
       await this.options.animation?.beforeStep?.({
@@ -2012,6 +2209,7 @@ export class DeterministicRuntime {
               page !== mainPage &&
               !page.isClosed() &&
               page.url() !== "about:blank" &&
+              !this.#permittedContinuationPages.has(page) &&
               ![...this.#pages.runtimePopups.values()].includes(page),
           );
         if (unexpected.length > 0) throw new Error(negative.description);

@@ -1288,16 +1288,7 @@ export class StudioController {
     await this.browser.navigate(this.targetUrl);
   }
 
-  async selectWorkflow(value: unknown) {
-    await this.#loadWorkflowLibrary();
-    if (["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state))
-      throw new Error("Stop the active operation before loading a workflow.");
-    if (typeof value !== "string")
-      throw new Error("A saved workflow selection is required.");
-    const entry = this.workflowLibraryEntries.find(
-      (candidate) => candidate.id === value,
-    );
-    if (!entry) throw new Error("Saved workflow was not found.");
+  async #readWorkflowLibraryEntry(entry: WorkflowLibraryEntry) {
     let workflow: CompiledWorkflow;
     let variables: LocalVariableValues = {};
     if (entry.legacy) {
@@ -1335,6 +1326,20 @@ export class StudioController {
       workflow = CompiledWorkflowSchema.parse(bundle.workflow);
       variables = LocalVariableValuesSchema.parse(bundle.variables ?? {});
     }
+    return { workflow, variables };
+  }
+
+  async selectWorkflow(value: unknown) {
+    await this.#loadWorkflowLibrary();
+    if (["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state))
+      throw new Error("Stop the active operation before loading a workflow.");
+    if (typeof value !== "string")
+      throw new Error("A saved workflow selection is required.");
+    const entry = this.workflowLibraryEntries.find(
+      (candidate) => candidate.id === value,
+    );
+    if (!entry) throw new Error("Saved workflow was not found.");
+    const { workflow, variables } = await this.#readWorkflowLibraryEntry(entry);
     this.workflow = workflow;
     this.localValues = variables;
     this.workflowName = entry.name;
@@ -1352,6 +1357,55 @@ export class StudioController {
     this.workflowLibraryStatus = `Loaded · ${entry.name} · version ${entry.version}`;
     await this.persistRecoverableState();
     return workflow;
+  }
+
+  async createContinuationWorkflowVariant(
+    sourceWorkflowId: unknown,
+    name: unknown,
+  ) {
+    await this.#loadWorkflowLibrary();
+    if (
+      ["RECORDING", "COMPILING", "RUNNING"].includes(this.machine.state) ||
+      this.#mutation
+    )
+      throw new Error(
+        "Stop the active operation before creating a workflow variant.",
+      );
+    if (typeof sourceWorkflowId !== "string")
+      throw new Error("A source workflow selection is required.");
+    const normalizedName = this.#normalizeWorkflowName(name);
+    if (!normalizedName) throw new Error("Workflow name must not be empty.");
+    const sourceEntry = this.workflowLibraryEntries.find(
+      (candidate) => candidate.id === sourceWorkflowId,
+    );
+    if (!sourceEntry) throw new Error("Source workflow was not found.");
+    const { workflow, variables } =
+      await this.#readWorkflowLibraryEntry(sourceEntry);
+    this.workflow = CompiledWorkflowSchema.parse({
+      ...workflow,
+      continuationConfirmationPolicy: {
+        mode: "accept-affirmative",
+        promptPhrase: "voulez-vous continuer",
+        affirmativeLabel: "oui",
+        maximumAcceptsPerRun: 20,
+      },
+    });
+    this.localValues = variables;
+    this.workflowName = normalizedName;
+    this.session = undefined;
+    this.telemetry = undefined;
+    this.aiPayload = undefined;
+    await this.#saveNamedWorkflow(normalizedName);
+    this.machine.reset();
+    if (!this.browser.status().open)
+      throw new Error("Open the managed browser before loading a workflow.");
+    this.machine.transition("BROWSER_OPEN");
+    this.machine.transition("READY_TO_TEACH");
+    this.machine.transition("READY_TO_RUN");
+    this.compilationDiagnostic = undefined;
+    this.workflowLibraryStatus = `Created local continuation variant · ${normalizedName}`;
+    await this.persistRecoverableState();
+    return this.workflow;
   }
 
   async renameWorkflow(id: unknown, name: unknown) {
@@ -1638,6 +1692,17 @@ export function createStudioServer(controller = new StudioController()) {
         const body = await readJson(request);
         await controller.selectWorkflow(body.id);
         return sendJson(response, 200, controller.snapshot());
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/api/workflows/continuation-variant"
+      ) {
+        const body = await readJson(request);
+        await controller.createContinuationWorkflowVariant(
+          body.sourceWorkflowId,
+          body.name,
+        );
+        return sendJson(response, 201, controller.snapshot());
       }
       if (
         request.method === "PATCH" &&

@@ -661,6 +661,51 @@ test("Workflow Library auto-saves immutable versions, reloads after restart and 
       );
       expect(versionOneArtifact).toContain(firstValue);
 
+      await controller.createContinuationWorkflowVariant(
+        versionOne!.id,
+        "Synthetic force confirmation",
+      );
+      const continuationVariant = controller.workflowLibraryEntries.find(
+        (entry) => entry.name === "Synthetic force confirmation",
+      );
+      expect(continuationVariant).toMatchObject({
+        version: 1,
+        legacy: false,
+      });
+      const continuationBundle = JSON.parse(
+        await readFile(
+          path.join(
+            rootDirectory,
+            "local-data",
+            "workflow-library",
+            continuationVariant!.artifactFile!,
+          ),
+          "utf8",
+        ),
+      );
+      expect(continuationBundle.workflow).toMatchObject({
+        continuationConfirmationPolicy: {
+          mode: "accept-affirmative",
+          promptPhrase: "voulez-vous continuer",
+          affirmativeLabel: "oui",
+          maximumAcceptsPerRun: 20,
+        },
+        compilationMetadata: {
+          modelCalls: 1,
+        },
+      });
+      expect(versionOneArtifact).toBe(
+        await readFile(
+          path.join(
+            rootDirectory,
+            "local-data",
+            "workflow-library",
+            versionOne!.artifactFile!,
+          ),
+          "utf8",
+        ),
+      );
+
       await controller.resetSyntheticFixture();
       await controller.startTeaching();
       const secondValue = "SYNTHETIC-LIBRARY-LITERAL-V2";

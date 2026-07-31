@@ -373,6 +373,12 @@ export function renderDhoBatchEntry() {
     </div>
   </div>
   <a class="save" href="#" data-vc-action="open-final-validation">Ouvrir la validation finale</a>
+  <div role="dialog" aria-labelledby="dho-continuation-heading" data-vc-dho-continuation hidden>
+    <h2 id="dho-continuation-heading">Confirmation DHO synthétique</h2>
+    <p>La somme des DHO est 275,00. Voulez-vous continuer ?</p>
+    <button type="button" data-vc-continuation-answer="yes">Oui</button>
+    <button type="button" data-vc-continuation-answer="no">Non</button>
+  </div>
   </section></main>
   <script>
     const current = Number(sessionStorage.getItem('vc2-dho-current') || '1');
@@ -380,12 +386,34 @@ export function renderDhoBatchEntry() {
     dho.name = 'dho_' + current;
     const master = document.querySelector('[name="entente_directe_tout"]');
     const managed = document.querySelector('[name="entente_directe_pending"]');
+    const continuation = document.querySelector('[data-vc-dho-continuation]');
     managed.name = 'entente_directe_' + current;
     master.addEventListener('click', () => {
       if (managed.checked !== master.checked) managed.click();
     });
     document.querySelector('[data-vc-action="open-payment-source"]').addEventListener('click', () => {
       window.open('/fixture/dho-batch/source', 'vc2-dho-source', 'width=620,height=360');
+    });
+    dho.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      const mode = sessionStorage.getItem('vc2-dho-continuation-mode');
+      if (mode === 'javascript') {
+        const accepted = confirm('La somme des DHO est 275,00. Voulez-vous continuer ?');
+        document.body.dataset.vcContinuationAccepted = String(accepted);
+      } else if (mode === 'unexpected') {
+        confirm('Confirmer une opération synthétique différente contenant 888,00.');
+      } else if (mode === 'html') {
+        event.preventDefault();
+        continuation.hidden = false;
+      }
+    });
+    continuation.querySelector('[data-vc-continuation-answer="yes"]').addEventListener('click', () => {
+      continuation.hidden = true;
+      document.body.dataset.vcContinuationAccepted = 'true';
+    });
+    continuation.querySelector('[data-vc-continuation-answer="no"]').addEventListener('click', () => {
+      continuation.hidden = true;
+      document.body.dataset.vcContinuationAccepted = 'false';
     });
     document.querySelector('[data-vc-action="open-final-validation"]').addEventListener('click', event => {
       event.preventDefault();

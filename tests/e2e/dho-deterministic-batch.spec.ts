@@ -6,6 +6,7 @@ const instruction =
   "Rechercher le premier chiffre entre 50 et 5000, exclure 53,90. Si le mot-clé VIR est détecté, cocher la première case Entente Directe. Répéter 20 fois.";
 
 test("selected popup text compiles to DHO extraction, conditional VIR and twenty local runs", async () => {
+  test.setTimeout(90_000);
   await withManagedBrowser(
     `${fixtureOrigin}/fixture/dho-batch/list`,
     async ({ browser, page, recorder }) => {
@@ -139,16 +140,27 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
         }),
       ).toBe(false);
 
+      const continuationWorkflow = {
+        ...workflow,
+        continuationConfirmationPolicy: {
+          mode: "accept-affirmative" as const,
+          promptPhrase: "voulez-vous continuer" as const,
+          affirmativeLabel: "oui" as const,
+          maximumAcceptsPerRun: 20,
+        },
+      };
+
       await page.evaluate(() => {
         sessionStorage.setItem("vc2-dho-results", "[]");
         sessionStorage.removeItem("vc2-dho-current");
         sessionStorage.setItem("vc2-dho-uniform-labels", "true");
         sessionStorage.setItem("vc2-dho-remove-processed", "true");
+        sessionStorage.setItem("vc2-dho-continuation-mode", "html");
       });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
       const firstRun = await new DeterministicRuntime({
         context: browser.context,
-        workflow,
+        workflow: continuationWorkflow,
         variables: {},
         mode: "local",
       }).run();
@@ -174,6 +186,11 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
       });
       expect(firstRun.llmCalls).toBe(0);
       expect(firstRun.openAIRequests).toBe(0);
+      expect(firstRun.redactedLog).toContain(
+        "Accepted 20 permitted continuation confirmations.",
+      );
+      expect(JSON.stringify(firstRun)).not.toContain("275,00");
+      expect(JSON.stringify(firstRun)).not.toContain("Voulez-vous continuer");
       expect(firstRun.extractionAudit).toHaveLength(20);
       expect(JSON.stringify(firstRun)).not.toContain("Référence exclue");
       expect(JSON.stringify(firstRun)).not.toContain("Règlement standard");
@@ -205,13 +222,14 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
         ),
       ).toBe(true);
 
-      await page.evaluate(() =>
-        sessionStorage.setItem("vc2-dho-results", "[]"),
-      );
+      await page.evaluate(() => {
+        sessionStorage.setItem("vc2-dho-results", "[]");
+        sessionStorage.setItem("vc2-dho-continuation-mode", "javascript");
+      });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
       const secondRun = await new DeterministicRuntime({
         context: browser.context,
-        workflow,
+        workflow: continuationWorkflow,
         variables: {},
         mode: "local",
       }).run();
@@ -221,6 +239,26 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
       expect(secondRun.loop?.completedIterations).toBe(20);
       expect(secondRun.llmCalls).toBe(0);
       expect(secondRun.openAIRequests).toBe(0);
+      expect(secondRun.redactedLog).toContain(
+        "Accepted 20 permitted continuation confirmations.",
+      );
+
+      await page.evaluate(() => {
+        sessionStorage.setItem("vc2-dho-results", "[]");
+        sessionStorage.setItem("vc2-dho-continuation-mode", "unexpected");
+      });
+      await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
+      const unexpectedRun = await new DeterministicRuntime({
+        context: browser.context,
+        workflow: continuationWorkflow,
+        variables: {},
+        mode: "local",
+      }).run();
+      expect(unexpectedRun.state).toBe("Failed");
+      expect(unexpectedRun.error).toBe(
+        "Unexpected browser dialog did not match the configured continuation policy.",
+      );
+      expect(JSON.stringify(unexpectedRun)).not.toContain("888,00");
     },
   );
 });

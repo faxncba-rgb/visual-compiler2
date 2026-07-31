@@ -733,6 +733,13 @@ export const CompilationDiagnosticSchema = z.object({
   actionId: z.string().optional(),
 });
 
+export const ContinuationConfirmationPolicySchema = z.object({
+  mode: z.literal("accept-affirmative"),
+  promptPhrase: z.literal("voulez-vous continuer"),
+  affirmativeLabel: z.literal("oui"),
+  maximumAcceptsPerRun: z.number().int().min(1).max(100).default(20),
+});
+
 export const CompiledWorkflowSchema = z.object({
   schemaVersion: z.literal("2.0.0"),
   id: z.string(),
@@ -747,6 +754,8 @@ export const CompiledWorkflowSchema = z.object({
   steps: z.array(CompiledStepSchema).min(1),
   loops: z.array(CompiledLoopSchema).default([]),
   variables: z.array(WorkflowVariableSchema),
+  continuationConfirmationPolicy:
+    ContinuationConfirmationPolicySchema.optional(),
   expectedOutcome: ApplicationOutcomeSchema,
   compilationMetadata: z.object({
     compiledAt: z.string().datetime(),
@@ -855,6 +864,9 @@ export type LocatorCandidate = z.infer<typeof LocatorCandidateSchema>;
 export type CompiledPageContext = z.infer<typeof CompiledPageContextSchema>;
 export type CompiledStep = z.infer<typeof CompiledStepSchema>;
 export type CompiledLoop = z.infer<typeof CompiledLoopSchema>;
+export type ContinuationConfirmationPolicy = z.infer<
+  typeof ContinuationConfirmationPolicySchema
+>;
 export type ApplicationOutcome = z.infer<typeof ApplicationOutcomeSchema>;
 export type CompiledWorkflow = z.infer<typeof CompiledWorkflowSchema>;
 export type RuntimeTelemetry = z.infer<typeof RuntimeTelemetrySchema>;
