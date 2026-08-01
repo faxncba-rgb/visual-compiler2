@@ -1523,7 +1523,7 @@ export class DeterministicRuntime {
       step,
       phase: "Resolving target",
     });
-    const deadline = Date.now() + this.#locatorResolutionTimeout(step);
+    let deadline = Date.now() + this.#locatorResolutionTimeout(step);
     let lastAttemptEvidence: Array<{
       strategy: LocatorCandidate["strategy"];
       count: number;
@@ -1532,6 +1532,16 @@ export class DeterministicRuntime {
       editable: boolean | "not-required";
     }> = [];
     do {
+      if (
+        step.expectsPopupContextId &&
+        this.#workflow.continuationConfirmationPolicy?.resumeStepId &&
+        !this.#continuationResumePending
+      ) {
+        const acceptedBefore = this.#continuationConfirmationCount;
+        await this.#settleContinuationConfirmation(0);
+        if (this.#continuationConfirmationCount > acceptedBefore)
+          deadline = Math.min(deadline, Date.now() + 750);
+      }
       const currentAttemptEvidence: typeof lastAttemptEvidence = [];
       for (const { candidate, rule } of this.#locatorAttempts(step)) {
         const locator = locatorForRule(root, rule);

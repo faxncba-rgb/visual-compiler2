@@ -414,6 +414,11 @@ export function renderDhoBatchEntry() {
         }
       } else if (mode === 'unexpected') {
         confirm('Confirmer une opération synthétique différente contenant 888,00.');
+      } else if (mode === 'delayed-html') {
+        event.preventDefault();
+        setTimeout(() => {
+          continuation.hidden = false;
+        }, 500);
       } else if (mode === 'html') {
         event.preventDefault();
         continuation.hidden = false;

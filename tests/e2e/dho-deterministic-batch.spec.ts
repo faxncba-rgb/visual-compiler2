@@ -245,7 +245,7 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
 
       await page.evaluate(() => {
         sessionStorage.setItem("vc2-dho-results", "[]");
-        sessionStorage.setItem("vc2-dho-continuation-mode", "javascript");
+        sessionStorage.setItem("vc2-dho-continuation-mode", "delayed-html");
         sessionStorage.setItem("vc2-dho-resume-at-sign", "true");
       });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
