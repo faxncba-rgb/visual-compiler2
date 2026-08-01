@@ -1362,6 +1362,7 @@ export class StudioController {
   async createContinuationWorkflowVariant(
     sourceWorkflowId: unknown,
     name: unknown,
+    resumeStepId?: unknown,
   ) {
     await this.#loadWorkflowLibrary();
     if (
@@ -1381,6 +1382,17 @@ export class StudioController {
     if (!sourceEntry) throw new Error("Source workflow was not found.");
     const { workflow, variables } =
       await this.#readWorkflowLibraryEntry(sourceEntry);
+    const normalizedResumeStepId =
+      typeof resumeStepId === "string" && resumeStepId.length > 0
+        ? resumeStepId
+        : undefined;
+    if (
+      normalizedResumeStepId &&
+      !workflow.steps.some(
+        (candidate) => candidate.id === normalizedResumeStepId,
+      )
+    )
+      throw new Error("Continuation resume step was not found.");
     this.workflow = CompiledWorkflowSchema.parse({
       ...workflow,
       continuationConfirmationPolicy: {
@@ -1388,6 +1400,9 @@ export class StudioController {
         promptPhrase: "voulez-vous continuer",
         affirmativeLabel: "oui",
         maximumAcceptsPerRun: 20,
+        ...(normalizedResumeStepId
+          ? { resumeStepId: normalizedResumeStepId }
+          : {}),
       },
     });
     this.localValues = variables;
@@ -1701,6 +1716,7 @@ export function createStudioServer(controller = new StudioController()) {
         await controller.createContinuationWorkflowVariant(
           body.sourceWorkflowId,
           body.name,
+          body.resumeStepId,
         );
         return sendJson(response, 201, controller.snapshot());
       }

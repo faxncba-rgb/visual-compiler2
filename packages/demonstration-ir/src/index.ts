@@ -738,6 +738,7 @@ export const ContinuationConfirmationPolicySchema = z.object({
   promptPhrase: z.literal("voulez-vous continuer"),
   affirmativeLabel: z.literal("oui"),
   maximumAcceptsPerRun: z.number().int().min(1).max(100).default(20),
+  resumeStepId: z.string().optional(),
 });
 
 export const CompiledWorkflowSchema = z.object({

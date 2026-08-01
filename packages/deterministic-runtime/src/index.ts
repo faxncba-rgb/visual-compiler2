@@ -379,8 +379,10 @@ export class DeterministicRuntime {
     | undefined;
   #dialogCursor = 0;
   #continuationConfirmationCount = 0;
+  #continuationResumePending = false;
   #continuationDialogFailure: Error | undefined;
   readonly #permittedContinuationPages = new Set<Page>();
+  readonly #continuationSkippedPopupContexts = new Set<string>();
   readonly #ephemeralValues = new Map<string, string>();
   readonly #outcomeBaselines = new Map<string, string | number>();
   readonly #extractionAudit: RuntimeTelemetry["extractionAudit"] = [];
@@ -448,6 +450,7 @@ export class DeterministicRuntime {
           loopFingerprints.add(fingerprint);
         }
         await this.#captureOutcomeBaselines();
+        let continuationResumeStepId: string | undefined;
         for (const [stepIndex, step] of this.#workflow.steps.entries()) {
           throwIfStopped(this.options.signal);
           const started = Date.now();
@@ -455,6 +458,22 @@ export class DeterministicRuntime {
             requestedIterations > 1
               ? `Iteration ${this.#loopIteration + 1}/${requestedIterations}: `
               : "";
+          if (
+            continuationResumeStepId &&
+            step.id !== continuationResumeStepId
+          ) {
+            telemetry.steps.push({
+              stepId: step.id,
+              pageContextId: step.pageContextId,
+              action: step.action,
+              status: "skipped",
+              durationMs: Date.now() - started,
+              message: `${iterationLabel}Skipped a transient popup branch after the permitted continuation confirmation.`,
+            });
+            continue;
+          }
+          if (step.id === continuationResumeStepId)
+            continuationResumeStepId = undefined;
           if (step.executionGuard) {
             const matched = runtimeGuardMatches(
               step.executionGuard,
@@ -513,6 +532,24 @@ export class DeterministicRuntime {
               message: `${iterationLabel}${result.message}`,
             });
           } catch (error) {
+            const continuationResumeStep =
+              await this.#resolveConfiguredContinuationResume(
+                step,
+                stepIndex,
+                error,
+              );
+            if (continuationResumeStep) {
+              telemetry.steps.push({
+                stepId: step.id,
+                pageContextId: step.pageContextId,
+                action: step.action,
+                status: "skipped",
+                durationMs: Date.now() - started,
+                message: `${iterationLabel}Skipped an unavailable transient popup opener after resolving the configured continuation target.`,
+              });
+              continuationResumeStepId = continuationResumeStep.id;
+              continue;
+            }
             if (step.optional) {
               telemetry.steps.push({
                 stepId: step.id,
@@ -668,6 +705,8 @@ export class DeterministicRuntime {
     this.#outcomeBaselines.clear();
     this.#activeDialog = undefined;
     this.#dialogCursor = 0;
+    this.#continuationResumePending = false;
+    this.#continuationSkippedPopupContexts.clear();
   }
 
   #loopAnchorStep(loop: CompiledLoop) {
@@ -845,6 +884,7 @@ export class DeterministicRuntime {
         }
         this.#continuationConfirmationCount += 1;
         await dialog.accept();
+        this.#continuationResumePending = true;
         return;
       }
       if (continuationPolicy && !step) {
@@ -981,6 +1021,7 @@ export class DeterministicRuntime {
       this.#permittedContinuationPages.add(match.page);
     await match.control.click({ timeout: this.#timeout });
     this.#continuationConfirmationCount += 1;
+    this.#continuationResumePending = true;
     if (match.semantic) {
       const deadline = Date.now() + Math.min(this.#timeout, 2_000);
       while (
@@ -1010,6 +1051,64 @@ export class DeterministicRuntime {
     } while (true);
     this.#throwContinuationDialogFailure();
     return this.#continuationConfirmationCount > initialCount;
+  }
+
+  async #resolveConfiguredContinuationResume(
+    failedStep: CompiledStep,
+    failedStepIndex: number,
+    error: unknown,
+  ) {
+    const policy = this.#workflow.continuationConfirmationPolicy;
+    if (
+      !policy?.resumeStepId ||
+      !this.#continuationResumePending ||
+      !failedStep.expectsPopupContextId ||
+      !(error instanceof Error) ||
+      !error.message.startsWith(
+        "No deterministic locator resolved the demonstrated target",
+      )
+    )
+      return;
+    const resumeStepIndex = this.#workflow.steps.findIndex(
+      (candidate) => candidate.id === policy.resumeStepId,
+    );
+    if (resumeStepIndex <= failedStepIndex) return;
+    const resumeStep = this.#workflow.steps[resumeStepIndex];
+    if (!resumeStep?.target || !["click", "submit"].includes(resumeStep.action))
+      return;
+    const failedContext = this.#workflow.pageContexts.find(
+      (candidate) => candidate.id === failedStep.pageContextId,
+    );
+    const resumeContext = this.#workflow.pageContexts.find(
+      (candidate) => candidate.id === resumeStep.pageContextId,
+    );
+    if (
+      failedContext?.role !== "main" ||
+      resumeContext?.role !== "main" ||
+      failedContext.pageId !== resumeContext.pageId ||
+      failedContext.origin !== resumeContext.origin ||
+      failedContext.pathname !== resumeContext.pathname
+    )
+      return;
+    const popupContextId = failedStep.expectsPopupContextId;
+    const hasOnlyTransientPopupBranch = this.#workflow.steps
+      .slice(failedStepIndex + 1, resumeStepIndex)
+      .every(
+        (candidate) =>
+          candidate.pageContextId === popupContextId ||
+          (candidate.action === "focus" &&
+            candidate.pageContextId === resumeStep.pageContextId),
+      );
+    if (!hasOnlyTransientPopupBranch) return;
+    try {
+      const resolved = await this.#resolveLocator(resumeStep);
+      if (!resolved.locator || !resolved.candidate) return;
+    } catch {
+      return;
+    }
+    this.#continuationResumePending = false;
+    this.#continuationSkippedPopupContexts.add(popupContextId);
+    return resumeStep;
   }
 
   async #cleanupTransientHandlers() {
@@ -1403,6 +1502,17 @@ export class DeterministicRuntime {
     return { locator, candidate: selectedFirst(step)[0] };
   }
 
+  #locatorResolutionTimeout(step: CompiledStep) {
+    const policy = this.#workflow.continuationConfirmationPolicy;
+    if (
+      this.#continuationResumePending &&
+      policy?.resumeStepId &&
+      step.expectsPopupContextId
+    )
+      return Math.min(this.#timeout, 750);
+    return this.#timeout;
+  }
+
   async #resolveLocator(step: CompiledStep): Promise<{
     locator?: Locator;
     candidate?: LocatorCandidate | undefined;
@@ -1413,7 +1523,7 @@ export class DeterministicRuntime {
       step,
       phase: "Resolving target",
     });
-    const deadline = Date.now() + this.#timeout;
+    const deadline = Date.now() + this.#locatorResolutionTimeout(step);
     let lastAttemptEvidence: Array<{
       strategy: LocatorCandidate["strategy"];
       count: number;
@@ -2235,6 +2345,9 @@ export class DeterministicRuntime {
         actual = await this.#pollOutcome(
           async () =>
             this.#pages.closedContexts.has(evidence.pageContextId) ||
+            this.#continuationSkippedPopupContexts.has(
+              evidence.pageContextId,
+            ) ||
             this.#pages.runtimePopups
               .get(evidence.pageContextId)
               ?.isClosed() === true,

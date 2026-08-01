@@ -373,6 +373,7 @@ export function renderDhoBatchEntry() {
     </div>
   </div>
   <a class="save" href="#" data-vc-action="open-final-validation">Ouvrir la validation finale</a>
+  <button type="button" data-vc-action="sign">Signer</button>
   <div role="dialog" aria-labelledby="dho-continuation-heading" data-vc-dho-continuation hidden>
     <h2 id="dho-continuation-heading">Confirmation DHO synthétique</h2>
     <p>La somme des DHO est 275,00. Voulez-vous continuer ?</p>
@@ -387,6 +388,14 @@ export function renderDhoBatchEntry() {
     const master = document.querySelector('[name="entente_directe_tout"]');
     const managed = document.querySelector('[name="entente_directe_pending"]');
     const continuation = document.querySelector('[data-vc-dho-continuation]');
+    const validationLink = document.querySelector('[data-vc-action="open-final-validation"]');
+    const signButton = document.querySelector('[data-vc-action="sign"]');
+    if (sessionStorage.getItem('vc2-dho-resume-at-sign') === 'true') {
+      validationLink.remove();
+    }
+    if (sessionStorage.getItem('vc2-dho-hide-sign') === 'true') {
+      signButton.remove();
+    }
     managed.name = 'entente_directe_' + current;
     master.addEventListener('click', () => {
       if (managed.checked !== master.checked) managed.click();
@@ -400,6 +409,9 @@ export function renderDhoBatchEntry() {
       if (mode === 'javascript') {
         const accepted = confirm('La somme des DHO est 275,00. Voulez-vous continuer ?');
         document.body.dataset.vcContinuationAccepted = String(accepted);
+        if (accepted && sessionStorage.getItem('vc2-dho-resume-at-sign') === 'true') {
+          validationLink.hidden = true;
+        }
       } else if (mode === 'unexpected') {
         confirm('Confirmer une opération synthétique différente contenant 888,00.');
       } else if (mode === 'html') {
@@ -410,16 +422,22 @@ export function renderDhoBatchEntry() {
     continuation.querySelector('[data-vc-continuation-answer="yes"]').addEventListener('click', () => {
       continuation.hidden = true;
       document.body.dataset.vcContinuationAccepted = 'true';
+      if (sessionStorage.getItem('vc2-dho-resume-at-sign') === 'true') {
+        validationLink.hidden = true;
+      }
     });
     continuation.querySelector('[data-vc-continuation-answer="no"]').addEventListener('click', () => {
       continuation.hidden = true;
       document.body.dataset.vcContinuationAccepted = 'false';
     });
-    document.querySelector('[data-vc-action="open-final-validation"]').addEventListener('click', event => {
+    validationLink.addEventListener('click', event => {
       event.preventDefault();
       window.open('/fixture/dho-batch/validation', 'vc2-dho-validation', 'width=520,height=340');
     });
     window.__vc2DhoValidated = function() {
+      document.body.dataset.vcModifiersValidated = 'true';
+    };
+    signButton.addEventListener('click', () => {
       const results = JSON.parse(sessionStorage.getItem('vc2-dho-results') || '[]');
       results.push({
         record: current,
@@ -428,7 +446,7 @@ export function renderDhoBatchEntry() {
       });
       sessionStorage.setItem('vc2-dho-results', JSON.stringify(results));
       location.assign('/fixture/dho-batch/list');
-    };
+    });
   </script></body></html>`;
 }
 

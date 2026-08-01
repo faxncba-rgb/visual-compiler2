@@ -660,10 +660,14 @@ test("Workflow Library auto-saves immutable versions, reloads after restart and 
         "utf8",
       );
       expect(versionOneArtifact).toContain(firstValue);
+      const continuationResumeStepId = controller.workflow!.steps.find(
+        (step) => step.action === "click" && step.target,
+      )!.id;
 
       await controller.createContinuationWorkflowVariant(
         versionOne!.id,
         "Synthetic force confirmation",
+        continuationResumeStepId,
       );
       const continuationVariant = controller.workflowLibraryEntries.find(
         (entry) => entry.name === "Synthetic force confirmation",
@@ -689,6 +693,7 @@ test("Workflow Library auto-saves immutable versions, reloads after restart and 
           promptPhrase: "voulez-vous continuer",
           affirmativeLabel: "oui",
           maximumAcceptsPerRun: 20,
+          resumeStepId: continuationResumeStepId,
         },
         compilationMetadata: {
           modelCalls: 1,

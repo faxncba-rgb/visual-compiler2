@@ -45,9 +45,12 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
       await validationPopup
         .getByLabel("Contrôle final", { exact: true })
         .check();
+      const validationClosed = validationPopup.waitForEvent("close");
       await validationPopup
         .getByRole("button", { name: "Valider et fermer", exact: true })
         .click();
+      await validationClosed;
+      await page.getByRole("button", { name: "Signer", exact: true }).click();
       await page.waitForURL("**/fixture/dho-batch/list");
       const session = await recorder.stop();
 
@@ -140,6 +143,22 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
         }),
       ).toBe(false);
 
+      const signerStep = workflow.steps.find(
+        (step) =>
+          step.action === "click" &&
+          step.locatorCandidates.some((candidate) =>
+            candidate.selectorPreview.includes("Signer"),
+          ),
+      );
+      const validationOpenerStep = workflow.steps.find((step) => {
+        const popupContext = workflow.pageContexts.find(
+          (context) => context.id === step.expectsPopupContextId,
+        );
+        return popupContext?.pathname === "/fixture/dho-batch/validation";
+      });
+      expect(signerStep).toBeDefined();
+      expect(validationOpenerStep).toBeDefined();
+
       const continuationWorkflow = {
         ...workflow,
         continuationConfirmationPolicy: {
@@ -147,6 +166,7 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
           promptPhrase: "voulez-vous continuer" as const,
           affirmativeLabel: "oui" as const,
           maximumAcceptsPerRun: 20,
+          resumeStepId: signerStep!.id,
         },
       };
 
@@ -156,6 +176,7 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
         sessionStorage.setItem("vc2-dho-uniform-labels", "true");
         sessionStorage.setItem("vc2-dho-remove-processed", "true");
         sessionStorage.setItem("vc2-dho-continuation-mode", "html");
+        sessionStorage.removeItem("vc2-dho-resume-at-sign");
       });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
       const firstRun = await new DeterministicRuntime({
@@ -225,6 +246,7 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
       await page.evaluate(() => {
         sessionStorage.setItem("vc2-dho-results", "[]");
         sessionStorage.setItem("vc2-dho-continuation-mode", "javascript");
+        sessionStorage.setItem("vc2-dho-resume-at-sign", "true");
       });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
       const secondRun = await new DeterministicRuntime({
@@ -242,10 +264,58 @@ test("selected popup text compiles to DHO extraction, conditional VIR and twenty
       expect(secondRun.redactedLog).toContain(
         "Accepted 20 permitted continuation confirmations.",
       );
+      const continuationRecoverySteps = secondRun.steps.filter((step) =>
+        step.message.includes(
+          "Skipped an unavailable transient popup opener after resolving the configured continuation target.",
+        ),
+      );
+      expect(continuationRecoverySteps).toHaveLength(20);
+      expect(
+        continuationRecoverySteps.every(
+          (step) => step.stepId === validationOpenerStep!.id,
+        ),
+      ).toBe(true);
+      expect(
+        secondRun.steps.filter(
+          (step) => step.stepId === signerStep!.id && step.status === "passed",
+        ),
+      ).toHaveLength(20);
+
+      await page.evaluate(() => {
+        sessionStorage.setItem("vc2-dho-results", "[]");
+        sessionStorage.setItem("vc2-dho-continuation-mode", "javascript");
+        sessionStorage.setItem("vc2-dho-resume-at-sign", "true");
+        sessionStorage.setItem("vc2-dho-hide-sign", "true");
+      });
+      await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
+      const unavailableResumeRun = await new DeterministicRuntime({
+        context: browser.context,
+        workflow: {
+          ...continuationWorkflow,
+          loops: continuationWorkflow.loops.map((loop) => ({
+            ...loop,
+            maximumIterations: 1,
+          })),
+        },
+        variables: {},
+        mode: "local",
+      }).run();
+      expect(unavailableResumeRun.state).toBe("Failed");
+      expect(
+        unavailableResumeRun.steps.some((step) =>
+          step.message.includes(
+            "Skipped an unavailable transient popup opener",
+          ),
+        ),
+      ).toBe(false);
+      expect(unavailableResumeRun.llmCalls).toBe(0);
+      expect(unavailableResumeRun.openAIRequests).toBe(0);
 
       await page.evaluate(() => {
         sessionStorage.setItem("vc2-dho-results", "[]");
         sessionStorage.setItem("vc2-dho-continuation-mode", "unexpected");
+        sessionStorage.removeItem("vc2-dho-resume-at-sign");
+        sessionStorage.removeItem("vc2-dho-hide-sign");
       });
       await browser.navigate(`${fixtureOrigin}/fixture/dho-batch/list`);
       const unexpectedRun = await new DeterministicRuntime({
