@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Teach an authorized browser workflow and replay it locally without an LLM."
+    />
+    <title>Visual Compiler 2 · Lab Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="lab-banner" role="status">LAB MODE</div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">VC²</span>
+        <div>
+          <h1>Visual Compiler 2</h1>
+          <p>Teach once. Compile locally. Replay deterministically.</p>
+        </div>
+      </div>
+      <div class="status-ribbon" aria-label="System status">
+        <span>Studio <strong id="studioState">STARTING</strong></span>
+        <span>Browser <strong id="browserStatus">OPENING</strong></span>
+        <span>Recorder <strong id="recorderStatus">OFF</strong></span>
+        <span>Compiler <strong id="compilerStatus">WAITING</strong></span>
+        <span>Runtime <strong id="runtimeStatus">READY</strong></span>
+      </div>
+    </header>
+
+    <section class="runtime-proof" aria-label="Runtime isolation">
+      <article>
+        <span>Runtime LLM calls</span>
+        <strong id="runtimeLlmCalls">0</strong>
+      </article>
+      <article>
+        <span>Runtime OpenAI requests</span>
+        <strong id="runtimeOpenAiRequests">0</strong>
+      </article>
+      <p>
+        Authentication stays in the managed browser. Teaching starts only when
+        you choose <strong>Start teaching</strong>.
+      </p>
+    </section>
+
+    <main class="studio-shell">
+      <nav class="flow-map" aria-label="Primary workflow">
+        <span><b>1</b> Open</span>
+        <i aria-hidden="true">→</i>
+        <span><b>2</b> Teach</span>
+        <i aria-hidden="true">→</i>
+        <span><b>3</b> Compile</span>
+        <i aria-hidden="true">→</i>
+        <span><b>4</b> Run locally</span>
+      </nav>
+
+      <section
+        id="compilationDiagnostics"
+        class="diagnostic-card"
+        aria-labelledby="diagnostics-heading"
+        aria-live="polite"
+        hidden
+      >
+        <div class="diagnostic-heading">
+          <div>
+            <span class="eyebrow danger">Persistent failure</span>
+            <h2 id="diagnostics-heading">Compilation diagnostics</h2>
+          </div>
+          <div class="button-row">
+            <button id="retryDiagnostic" class="primary">Retry</button>
+            <button id="copyDiagnostics">Copy diagnostics</button>
+            <button id="clearDiagnostics">Clear</button>
+          </div>
+        </div>
+        <dl class="diagnostic-facts">
+          <div>
+            <dt>HTTP status</dt>
+            <dd id="diagnosticHttpStatus">—</dd>
+          </div>
+          <div>
+            <dt>Stage</dt>
+            <dd id="diagnosticCompilerStage">—</dd>
+          </div>
+          <div>
+            <dt>Workflow state</dt>
+            <dd id="diagnosticWorkflowState">—</dd>
+          </div>
+        </dl>
+        <pre id="diagnosticServerMessage"></pre>
+        <details>
+          <summary>Advanced technical details</summary>
+          <pre id="diagnosticStructuralEvidence"></pre>
+        </details>
+      </section>
+
+      <section class="flow-grid">
+        <article class="flow-card" aria-labelledby="browser-heading">
+          <div class="step-heading">
+            <span class="step-number">1</span>
+            <div>
+              <span class="eyebrow">Open</span>
+              <h2 id="browser-heading">Managed browser</h2>
+            </div>
+          </div>
+          <p id="browserGuidance" class="lead">
+            The dedicated browser is opening automatically.
+          </p>
+          <dl class="compact-facts">
+            <div>
+              <dt>Current page</dt>
+              <dd id="canonicalPage">—</dd>
+            </div>
+            <div>
+              <dt>Authentication</dt>
+              <dd>Manual in browser</dd>
+            </div>
+          </dl>
+          <div class="button-row">
+            <button id="reopenBrowser">Reopen managed browser</button>
+            <button id="returnHome">Return to DPI home</button>
+          </div>
+        </article>
+
+        <article class="flow-card teach-card" aria-labelledby="teach-heading">
+          <div class="step-heading">
+            <span class="step-number">2</span>
+            <div>
+              <span class="eyebrow">Teach</span>
+              <h2 id="teach-heading">Demonstration</h2>
+            </div>
+            <span id="recordingIndicator" class="recording-indicator">
+              Recorder idle
+            </span>
+          </div>
+          <div class="button-row">
+            <button id="startTeaching" class="primary">Start teaching</button>
+            <button id="stopTeaching" class="danger">Stop teaching</button>
+            <button id="clearDemonstration">Clear demonstration</button>
+            <button id="restoreLastDemonstration">
+              Restore last demonstration
+            </button>
+          </div>
+          <p id="lastDemonstrationStatus" class="supporting">
+            No completed local demonstration is available.
+          </p>
+          <ol id="timeline" class="timeline">
+            <li class="empty">
+              Authenticate and navigate in the managed browser, then start
+              teaching.
+            </li>
+          </ol>
+        </article>
+
+        <article class="flow-card" aria-labelledby="compile-heading">
+          <div class="step-heading">
+            <span class="step-number">3</span>
+            <div>
+              <span class="eyebrow">Compile</span>
+              <h2 id="compile-heading">Local artifact</h2>
+            </div>
+          </div>
+          <div id="demonstrationSummary" class="summary-box">
+            Stop teaching to prepare a demonstration.
+          </div>
+          <div class="workflow-library">
+            <label for="workflowName">Workflow name</label>
+            <input
+              id="workflowName"
+              maxlength="100"
+              autocomplete="off"
+              placeholder="Name a new or selected workflow"
+            />
+            <p class="supporting">
+              Edit this field and press Enter to rename the selected workflow.
+            </p>
+            <label for="savedWorkflows">Saved workflows</label>
+            <select id="savedWorkflows">
+              <option value="">Select a saved workflow</option>
+            </select>
+            <p id="workflowLibraryStatus" class="supporting">
+              No saved workflows yet.
+            </p>
+          </div>
+          <details id="optionalAiDetails" class="optional-ai">
+            <summary>GPT-5.6 compile-time instructions (optional)</summary>
+            <p>
+              Compile calls GPT-5.6 once to produce validated Semantic IR.
+              Instructions may be left empty. Run locally never calls AI.
+            </p>
+            <label for="generalizationInstruction">Instruction</label>
+            <textarea
+              id="generalizationInstruction"
+              placeholder="Example: Repeat the demonstrated actions on each following eligible row until no eligible row remains."
+            ></textarea>
+          </details>
+          <div class="compile-row">
+            <span id="compileMode" class="mode-pill">
+              Checking GPT-5.6 compile-time availability…
+            </span>
+            <button id="compile" class="primary">Compile</button>
+          </div>
+        </article>
+
+        <article class="flow-card" aria-labelledby="run-heading">
+          <div class="step-heading">
+            <span class="step-number">4</span>
+            <div>
+              <span class="eyebrow">Run</span>
+              <h2 id="run-heading">Deterministic replay</h2>
+            </div>
+          </div>
+          <p id="runtimeState" class="lead">
+            Compile a demonstration to run it.
+          </p>
+          <div class="button-row run-actions">
+            <button id="localRun" class="primary">Run locally</button>
+            <button id="animatedRun">1st run — animated</button>
+            <button id="runAgain">Run again</button>
+            <button id="stopAll" class="danger">Stop</button>
+            <button id="reset">Reset workflow</button>
+          </div>
+        </article>
+      </section>
+
+      <details id="advancedDetails" class="advanced">
+        <summary>Advanced details</summary>
+        <div class="advanced-grid">
+          <section>
+            <h3>Page Context Graph <span id="pageCount">0 contexts</span></h3>
+            <ol id="pageGraph" class="page-graph">
+              <li class="empty">No browser contexts yet.</li>
+            </ol>
+          </section>
+          <section>
+            <h3>Local runtime variables</h3>
+            <div id="variables" class="variable-list">
+              <p class="empty">No local variables yet.</p>
+            </div>
+          </section>
+          <section>
+            <h3>Derived outcome evidence</h3>
+            <div id="outcomeCandidates">
+              <p class="empty">No outcome candidates yet.</p>
+            </div>
+          </section>
+          <section>
+            <h3>Locator candidates</h3>
+            <div id="locatorCandidates">No workflow compiled.</div>
+          </section>
+        </div>
+        <details>
+          <summary>Demonstration IR</summary>
+          <pre id="demonstrationJson">No demonstration recorded.</pre>
+        </details>
+        <details>
+          <summary>Compiled workflow</summary>
+          <pre id="compiledJson">No workflow compiled.</pre>
+        </details>
+        <details>
+          <summary>Generated Playwright outline</summary>
+          <pre id="generatedCode">No deterministic outline generated.</pre>
+        </details>
+        <details>
+          <summary>Redacted AI payload preview</summary>
+          <pre id="payloadPreview">No payload prepared.</pre>
+        </details>
+        <details>
+          <summary>Runtime log</summary>
+          <pre id="runtimeLog">No local run yet.</pre>
+        </details>
+        <details>
+          <summary>Redacted copied-text audit</summary>
+          <pre id="extractionAudit">
+No local extraction yet. Raw copied text is never persisted.</pre
+          >
+        </details>
+        <details>
+          <summary>Persistent Studio event log</summary>
+          <pre id="studioEventLog">No persistent Studio events yet.</pre>
+        </details>
+      </details>
+    </main>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

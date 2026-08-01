@@ -1,48 +1,38 @@
 # Visual Compiler 2
 
-**Teach once. Compile once. Run locally forever.**
+**Open automatically → Teach → Compile → Run locally**
 
-Visual Compiler 2 is a local-first browser workflow compiler. A person performs
-an authorized workflow once in a Playwright-managed browser. The recorder
-captures the exact demonstrated elements and browser contexts, the compiler
-turns that evidence into a validated deterministic artifact, and the runtime
-replays the artifact locally without an LLM or OpenAI request.
+Visual Compiler 2 is a local, demonstration-first browser workflow compiler
+for an authorized synthetic testing environment. Studio launches its own
+Playwright-managed Chromium, the operator authenticates and navigates manually,
+and recording begins only after **Start teaching**. A stopped demonstration is
+compiled once by GPT-5.6 into validated Semantic IR, then runs deterministically
+without further OpenAI calls.
 
-> **LAB MODE — synthetic test records only**
+![Visual Compiler 2 Lab Studio](docs/screenshots/studio-lab.png)
 
-The MVP intentionally targets the bundled synthetic DPI. It must not be used
-with real patient data, real credentials, or an environment the operator is not
-authorized to automate.
+## Lab Mode
 
-## Teach, compile, run
+Normal Lab Mode uses this documented default:
 
-```mermaid
-flowchart LR
-  A[Manual authentication] --> B[Start teaching]
-  B --> C[Demonstration IR]
-  C --> D{Generalization?}
-  D -->|No| E[Direct compiler]
-  D -->|Yes| F[Validated mock AI compiler]
-  E --> G[Versioned workflow]
-  F --> G
-  G --> H[Deterministic runtime]
-  H --> I[Positive outcome verification]
+```text
+VISUAL_COMPILER_TARGET_URL=https://dpi-ncba.gbna-sante.fr/
 ```
 
-Authentication and navigation happen before recording. Typed values become
-local variables by default and are omitted from the AI payload. A simple
-demonstration compiles locally. Optional generalization instructions go through
-a versioned, strictly validated mocked interface in this MVP; mocks are always
-identified as mocks.
+On startup, Studio automatically opens that home page in the dedicated
+Git-ignored profile `.local/browser-profile/`. The profile is created with
+restrictive local permissions where supported and is never shared with another
+project. **Reopen managed browser** recovers a manually closed browser and
+**Return to DPI home** navigates back to the configured home.
 
-After compilation, **1st run — animated** and **Run locally** are both available
-immediately. The animated command is an optional presentation layer. Run
-locally bypasses animation and per-step confirmation. Both call the same
-runtime engine with the same compiled artifact.
+Authentication happens only inside the managed browser. Studio never asks for
+credentials. Password fields, cookies, tokens, storage, authorization data and
+query parameters are not recorded or persisted. The user navigates to an
+authorized synthetic patient before selecting **Start teaching**.
 
-## Quick start
+## Use
 
-Requirements: macOS or Linux, Node.js 20+, and npm.
+Requirements: Node.js 20+, npm, and Chromium installed for Playwright.
 
 ```bash
 npm ci
@@ -50,64 +40,178 @@ npx playwright install chromium
 npm run dev
 ```
 
-Open <http://127.0.0.1:3100>. The synthetic DPI runs at
-<http://127.0.0.1:4273/fixture?variant=A>.
+Normal compilation reads `OPENAI_API_KEY` only from the Git-ignored
+`.env.local` file, which must have mode `0600`. The compiler captures the key
+privately and removes it from the process environment before any runtime can
+start.
 
-1. Select **Open managed browser**.
-2. Complete manual authentication/navigation if your authorized fixture needs
-   it. For the bundled fixture, choose **Authentication complete**.
-3. Choose **Start teaching**, edit the consultation field, and select
-   **Enregistrer**.
-4. Choose **Stop teaching**, review the timeline and local variables, then
-   **Compile**.
-5. Choose either **Run locally** or **1st run — animated**.
-6. Use **Run again** without teaching or compiling again.
+Open <http://127.0.0.1:3100>. The normal flow is:
 
-The managed browser profile is stored only under `browser-profiles/` and is
-Git-ignored. Workflow values live separately under `local-data/` and are also
-Git-ignored.
+1. Authenticate and navigate manually in the browser that opened
+   automatically.
+2. Select **Start teaching**, perform the workflow, then **Stop teaching**.
+3. Optionally enter a **Workflow name**, review the concise chronological
+   timeline and select **Compile**.
+4. Select **Run locally**. Use **Run again** to replay the same artifact.
+5. Later, select an immutable version from **Saved workflows** and run it
+   without teaching again.
 
-## Browser and popup handling
+**1st run — animated** is an optional presentation mode. It uses the same
+artifact and runtime as local execution; local execution supplies no animation
+callbacks and requires no per-step confirmation.
 
-Each page, popup, tab, and same-origin frame gets a stable session identity in a
-Page Context Graph. Artifacts use canonical origins and paths without query
-parameters. Opener relationships, page roles, title patterns, structural
-fingerprints, and expected landmarks are used instead of numeric page order.
-Cross-origin frames are opaque. Popup creation, action, closure, and return to
-the opener are represented explicitly.
+The optional GPT-5.6 instruction area is collapsed by default; an empty
+instruction still compiles once with GPT-5.6. If the local key is unavailable,
+Studio says so explicitly and disables Compile. Automated tests use a validated
+mock of the same structured-output contract and never call OpenAI.
 
-## AI generalization and local variables
+## Teaching and causal recording
 
-The Studio keeps three inputs visibly separate:
+The recorder consolidates raw browser noise into high-level actions:
 
-- **Demonstration:** actions and redacted structure captured from the browser.
-- **AI generalization instructions:** the only free text intentionally included
-  in the mocked compile-time AI payload.
-- **Local runtime variables:** demonstrated values used by local execution and
-  not included in the AI payload by default.
+- click and double click, promoting nested targets to the actionable ancestor;
+- one committed editing transaction for an ordinary typing or composition
+  burst, flushed before click, submit, navigation, frame detach, page close or
+  **Stop teaching**;
+- meaningful keys and shortcuts, including Tab, Enter, Escape and arrows;
+- check, uncheck, select, submit and causally relevant focus;
+- actions in same-origin frames and managed popups;
+- popup editing, dialog, navigation, frame replacement and closure events;
+- explicit extract-to-memory and memory-to-target dataflow for observable
+  copy/paste gestures.
 
-The **Payload sent to AI** preview strips query parameters, secrets, form
-values, patient-like identifiers, cookies, tokens, storage, and authorization
-state. The repository contains no API key and automated development makes no
-live model call.
+Every action has a monotonic capture sequence and time offset, stable page/frame
+context, semantic target descriptor, action compatibility, observed reactions,
+resulting stable state and causal links where later browser events were caused
+by a human action. The Page Context Graph stores stable semantic identities,
+not Playwright `Page` or `Frame` objects. Stop teaching performs bounded DOM
+quiet detection and reconciles late popup, rerender, iframe and outcome
+effects.
 
-## Zero-LLM runtime proof
+The target descriptor is captured when an edit starts, before a legacy editor
+or iframe can rerender. Runtime reacquires the current live page, popup, frame
+and element from that descriptor instead of retaining stale browser objects.
 
-The runtime package has no OpenAI dependency and works with
-`OPENAI_API_KEY` unset. It rejects OpenAI-domain HTTP and WebSocket traffic and
-always reports:
+Target descriptors use accessibility names, labels, control family, editable,
+readonly, enabled, checked/selected state, form and semantic container,
+neighbors, frame/page description, stable attributes and secondary geometry.
+Coordinates are never a primary locator, and a field is never selected merely
+because it is the first textbox.
 
-```json
-{
-  "llmCalls": 0,
-  "openAIRequests": 0
-}
+## Workflow values
+
+Visual Compiler 2 distinguishes three value classes:
+
+- authorized demonstrated text is a
+  `literal / workflow` constant stored in the local artifact and replayed
+  exactly;
+- copied page content is a `runtime-variable / memory-only` value extracted
+  again on every run and never stored in the artifact, generated source,
+  diagnostics or Studio event log;
+- credentials, passwords, authentication-like fields, cookies, tokens, browser
+  storage, authorization/CSRF data, session identifiers and query parameters
+  are forbidden and excluded before recording or persistence.
+
+The compile-time model receives only a redacted structural trace: chronology,
+keyboard scope, semantic DOM/accessibility descriptors, frames, popup states
+and observed reactions. Form contents, query parameters, cookies, tokens and
+authentication data are excluded. Its structured Semantic IR must preserve
+every demonstrated action ID, type and order before the deterministic compiler
+accepts it.
+
+The deterministic compiler records an ordered entry strategy for every editable
+target: standard fill, contenteditable fill, sequential keys when required,
+legacy visible-editor/backing-field synchronization, then a documented native
+setter Lab fallback. Runtime verifies the resulting live value before executing
+the next action. A failed fill therefore stops before **Enregistrer** and cannot
+produce a false `PASSED`.
+
+## Workflow Library
+
+A successful compile with a non-empty **Workflow name** automatically writes a
+new immutable version under `local-data/workflow-library/`. The local index and
+bundles use private file permissions where supported. Recompiling creates the
+next version rather than overwriting a working artifact. Selecting an entry
+from **Saved workflows** loads it into `READY_TO_RUN`; saved versions remain
+available after a Studio restart. Compatible legacy compiled JSON artifacts are
+listed read-only where practical.
+
+Library metadata contains canonical origins and paths, locator/verification
+metadata, checksum and last-run state. It never contains authentication state,
+query strings or runtime-derived copied content.
+
+## Compilation and outcomes
+
+Compile is enabled after teaching stops when at least one executable action was
+recorded. Missing outcome evidence does not block compilation or local
+execution. Studio automatically selects only the strongest observed outcome:
+
+- `VERIFIED`: strong positive evidence was reconciled;
+- `PARTIALLY_VERIFIED`: some evidence exists but is not strong enough;
+- `UNVERIFIED`: no positive outcome was derived.
+
+Runtime results are intentionally distinct:
+
+- `PASSED`: actions completed and required positive evidence was verified;
+- `COMPLETED_UNVERIFIED`: actions completed without a verifiable positive
+  outcome;
+- `FAILED`: an action failed, required verified evidence was absent, or a known
+  error/negative condition appeared;
+- `STOPPED`: the user aborted execution.
+
+Visual Compiler 2 never reports `PASSED` from action completion alone.
+
+## Persistent diagnostics
+
+Every browser-open, compile, request or runtime failure produces a persistent
+redacted diagnostics card. It appears immediately and remains visible until a
+subsequent successful compile/run or an explicit **Clear**. A failed retry does
+not replace it with a temporary-only toast. **Retry** performs the relevant
+browser, compile or runtime operation and **Copy diagnostics** copies one
+paste-ready block containing the timestamp, HTTP status, compiler/runtime
+stage, workflow state, redacted server message, Teaching trace ID and available
+step/target/locator/reaction evidence.
+
+The same record is appended to `local-data/studio-events.jsonl` and written to
+the Studio terminal. Form values, patient data, full query-bearing URLs,
+cookies, tokens, storage, passwords and authentication headers are excluded.
+Raw IR, locators, generated outline, payload preview and logs live in the
+collapsed **Advanced details** section.
+
+Teaching automatically writes a structural Before/Action/After trace under
+`local-data/teaching-traces/`. Trace JSONL contains timing and redacted semantic
+structure, never typed or copied contents. Screenshots are enabled only for
+synthetic automated fixtures; normal managed-browser sessions persist metadata
+only.
+
+## Stored demonstrations
+
+The last completed demonstration is stored under
+`local-data/last-demonstration/` with its structural session and authorized
+workflow literals. Legacy local-value files remain readable for compatible old
+artifacts. Restore requires a compatible live page structure. Existing
+demonstrations that lack outcome evidence migrate to `UNVERIFIED` and remain
+compilable; they are not deleted.
+
+All browser profiles, local values, demonstrations, compiled artifacts and
+event logs are Git-ignored.
+
+## Internal test fixtures
+
+Synthetic layouts and security pages are internal test fixtures only. They are
+not application profiles and never appear in the normal Studio UI. Automated
+tests must set an explicit local target:
+
+```bash
+VC_TEST_MODE=1 \
+VISUAL_COMPILER_TEST_TARGET_URL=http://127.0.0.1:4273/fixture?variant=A \
+npm run dev
 ```
 
-Security tests statically reject OpenAI imports in the runtime and exercise the
-network blocker.
+Test mode rejects non-local targets. The Playwright configuration always uses
+the local override, so automated tests do not contact the real DPI.
 
-## Commands
+## Verification
 
 ```bash
 npm run build
@@ -116,28 +220,17 @@ npm run test:security
 npm run test:e2e
 ```
 
-## Privacy boundaries
+The deterministic runtime has no OpenAI dependency, does not read an API key,
+and blocks OpenAI HTTP and WebSocket endpoints. Telemetry always exposes
+`llmCalls` and `openAIRequests`; successful local runs keep both at zero.
 
-Visual Compiler 2 never records password values, cookies, tokens, browser
-storage, authorization headers, URL query parameters, or a complete sensitive
-screenshot. Authentication is manual. Studio binds to `127.0.0.1` by default.
-Runtime telemetry is structural and redacted.
-
-## Supported platforms and limitations
-
-The primary MVP target is a local Mac with Chromium. Linux is supported for
-headless automated tests. Cross-origin frames are lifecycle-only opaque
-contexts. The GPT-5.6 interface is mocked and schema-validated; a live
-compile-time adapter is deliberately not enabled. The visual review editor
-supports step rename, delete, optionality, variable naming, and success evidence
-but is not a general Playwright code editor.
-
-## Roadmap
-
-- Explicitly authorized live GPT-5.6 compile-time adapter.
-- Richer repeated-row demonstration and visual loop editor.
-- More legacy editor adapters and structural compatibility probes.
-- Signed artifact bundles and expanded migration tooling.
+Known deliberate limits: cross-origin frame contents, closed shadow DOM and
+fully virtualized copy/paste gestures without observable DOM events are not
+recorded. Native setter support is a final Lab fallback, not a claim of
+universal website compatibility. Automated tests never contact the real DPI;
+that retest remains an authorized manual operator action.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md),
-[MIGRATION_NOTES.md](MIGRATION_NOTES.md), and [DECISIONS.md](DECISIONS.md).
+[CODEX_COLLABORATION.md](CODEX_COLLABORATION.md),
+[MIGRATION_NOTES.md](MIGRATION_NOTES.md), [DECISIONS.md](DECISIONS.md), and
+[docs/MANUAL_TEST.md](docs/MANUAL_TEST.md).
